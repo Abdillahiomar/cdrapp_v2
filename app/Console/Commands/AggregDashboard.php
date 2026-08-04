@@ -15,6 +15,9 @@ class AggregDashboard extends Command
     protected $signature   = 'dashboard:agreger {--date= : Date Y-m-d (défaut: hier)} {--all : Tout recalculer depuis le début}';
     protected $description = 'Agrège les transactions dans dashboard_aggregations';
 
+    // Statut des transactions à agréger (valeur exacte en base)
+    private const STATUT_COMPLETED = 'Completed';
+
     public function handle(): void
     {
         if ($this->option('all')) {
@@ -43,6 +46,7 @@ class AggregDashboard extends Command
             ->join('transaction_types', 'fact_txn_v2.txn_index', '=', 'transaction_types.txn_index')
             ->where('fact_txn_v2.transaction_initiated_time', '>=', $debut)
             ->where('fact_txn_v2.transaction_initiated_time', '<',  $fin)
+            ->where('fact_txn_v2.status', '=', self::STATUT_COMPLETED)
             ->selectRaw("
                 fact_txn_v2.transaction_initiated_time::date  AS jour,
                 fact_txn_v2.txn_index                         AS txn_index,
@@ -76,8 +80,9 @@ class AggregDashboard extends Command
         $this->warn('Recalcul complet — suppression de toutes les agrégations...');
         DashboardAggregation::truncate();
 
-        // Récupère toutes les dates distinctes dans fact_txn_v2
+        // Récupère toutes les dates distinctes dans fact_txn_v2 (transactions complétées uniquement)
         $dates = Transaction::query()
+            ->where('status', '=', self::STATUT_COMPLETED)
             ->selectRaw('transaction_initiated_time::date as jour')
             ->groupBy(DB::raw('transaction_initiated_time::date'))
             ->orderBy('jour')
