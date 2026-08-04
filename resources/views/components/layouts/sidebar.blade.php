@@ -116,7 +116,7 @@
             </a>
         @endcan
 
-        @can('revenue_accounts.view')
+        
             <a href="{{ route('revenue.index') }}" wire:navigate
                style="{{ request()->routeIs('revenue.*') ? $linkActive : $linkInactive }}">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
@@ -129,7 +129,7 @@
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
             </a>
-        @endcan
+        
 
         {{-- ── OPÉRATIONS ── --}}
        

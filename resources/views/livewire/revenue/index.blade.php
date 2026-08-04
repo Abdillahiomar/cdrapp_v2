@@ -42,11 +42,11 @@ new class extends Component {
     public function with(): array
     {
         // Toujours chargé pour le select
-        $aliases = RevenueAccount::select('ALIAS')
-            ->whereNotNull('ALIAS')
+        $aliases = RevenueAccount::select('alias')
+            ->whereNotNull('alias')
             ->distinct()
-            ->orderBy('ALIAS')
-            ->pluck('ALIAS');
+            ->orderBy('alias')
+            ->pluck('alias');
 
         if (!$this->searched) {
             return [
@@ -60,28 +60,28 @@ new class extends Component {
         }
 
         $query = RevenueAccount::query()
-            ->whereDate('DATA_DATE', $this->date);
+            ->whereDate('data_date', $this->date);
 
         // Après
         if ($this->alias) {
-            $query->where('ALIAS', $this->alias);
+            $query->where('alias', $this->alias);
         }
 
         if ($this->account_no) {
-            $query->where('ACCOUNT_NO', 'like', '%' . $this->account_no . '%');
+            $query->where('account_no', 'like', '%' . $this->account_no . '%');
         }
 
         // KPIs sur la même requête sans pagination
         $kpisQuery = clone $query;
         $kpis = [
             'total_comptes'    => $kpisQuery->count(),
-            'total_balance'    => $kpisQuery->sum('BALANCE'),
-            'total_reserved'   => $kpisQuery->sum('RESERVED_BALANCE'),
-            'total_unclear'    => $kpisQuery->sum('UNCLEAR_BALANCE'),
+            'total_balance'    => $kpisQuery->sum('balance'),
+            'total_reserved'   => $kpisQuery->sum('reserved_balance'),
+            'total_unclear'    => $kpisQuery->sum('unclear_balance'),
         ];
 
         return [
-            'accounts' => $query->orderByDesc('BALANCE')->paginate(50),
+            'accounts' => $query->orderByDesc('balance')->paginate(50),
             'kpis'     => $kpis,
             'aliases'  => $aliases,
         ];
@@ -246,21 +246,21 @@ new class extends Component {
                                 </td>
 
                                 <td style="padding:10px 12px; color:#6b7280; white-space:nowrap;">
-                                    {{ $acc->DATA_DATE ? \Carbon\Carbon::parse($acc->DATA_DATE)->format('d/m/Y') : '—' }}
+                                    {{ $acc->data_date ? \Carbon\Carbon::parse($acc->data_date)->format('d/m/Y') : '—' }}
                                 </td>
 
                                 <td style="padding:10px 12px; font-family:monospace; font-size:11px; color:#374151; white-space:nowrap;">
-                                    {{ $acc->ACCOUNT_NO ?? '—' }}
+                                    {{ $acc->account_no ?? '—' }}
                                 </td>
 
                                 <td style="padding:10px 12px; font-weight:600; color:#111827; white-space:nowrap;">
-                                    {{ $acc->ALIAS ?? '—' }}
+                                    {{ $acc->alias ?? '—' }}
                                 </td>
 
                                 <td style="padding:10px 12px;">
-                                    @if($acc->ACCOUNT_TYPE_ID)
+                                    @if($acc->account_type_id)
                                         <span style="background:#E8ECF8; color:#1B2F6E; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px; white-space:nowrap;">
-                                            {{ $acc->ACCOUNT_TYPE_ID }}
+                                            {{ $acc->account_type_id }}
                                         </span>
                                     @else
                                         <span style="color:#9ca3af;">—</span>
@@ -268,34 +268,45 @@ new class extends Component {
                                 </td>
 
                                 <td style="padding:10px 12px; color:#374151; white-space:nowrap;">
-                                    {{ $acc->IDENTITY_TYPE ?? '—' }}
+                                    
+                                    
+                                    @php $at = $acc->identity_type; @endphp
+                                    @if(in_array($at, ['8000', 'SP', 'SP']))
+                                        <span style="background:#E5F5ED; color:#005C2B; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">SP</span>
+                                    @elseif(in_array($st, ['9000', 'BANK', 'Bank']))
+                                        <span style="background:#FFF3D0; color:#7A4F00; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">Bank</span>
+                                    @elseif(in_array($st, ['5000', 'ORG', 'Org']))
+                                        <span style="background:#FDECEA; color:#7F1D1D; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">Org</span>
+                                    @else
+                                        <span style="background:#f3f4f6; color:#6b7280; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">Customer</span>
+                                    @endif
                                 </td>
 
                                 <td style="padding:10px 12px; color:#374151; white-space:nowrap;">
-                                    {{ $acc->VALUE_TYPE ?? '—' }}
+                                    {{ $acc->value_type ?? '—' }}
                                 </td>
 
                                 <td style="padding:10px 12px; text-align:center;">
                                     <span style="background:#f3f4f6; color:#374151; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">
-                                        {{ $acc->CURRENCY ?? '—' }}
+                                        {{ $acc->currency ?? '—' }}
                                     </span>
                                 </td>
 
                                 <td style="padding:10px 12px; text-align:right; font-weight:600; color:#111827; white-space:nowrap;">
-                                    {{ number_format($acc->BALANCE, 2, ',', ' ') }}
+                                    {{ number_format($acc->balance, 2, ',', ' ') }}
                                 </td>
 
                                 <td style="padding:10px 12px; text-align:right; color:#378ADD; white-space:nowrap;">
-                                    {{ number_format($acc->RESERVED_BALANCE, 2, ',', ' ') }}
+                                    {{ number_format($acc->reserved_balance, 2, ',', ' ') }}
                                 </td>
 
                                 <td style="padding:10px 12px; text-align:right; color:#E24B4A; white-space:nowrap;">
-                                    {{ number_format($acc->UNCLEAR_BALANCE, 2, ',', ' ') }}
+                                    {{ number_format($acc->unclear_balance, 2, ',', ' ') }}
                                 </td>
 
                                 <td style="padding:10px 12px;">
-                                    @php $st = $acc->ACCOUNT_STATUS; @endphp
-                                    @if(in_array($st, ['1', 'ACTIVE', 'Active']))
+                                    @php $st = $acc->account_status; @endphp
+                                    @if(in_array($st, ['1002', 'ACTIVE', 'Active']))
                                         <span style="background:#E5F5ED; color:#005C2B; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">Active</span>
                                     @elseif(in_array($st, ['2', 'FROZEN', 'Frozen']))
                                         <span style="background:#FFF3D0; color:#7A4F00; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">Frozen</span>

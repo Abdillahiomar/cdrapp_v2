@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class RevenueAccount extends Model
 {
-     protected $table = 'accounts_data';
+     protected $table = 'accounts_balance';
     public $timestamps = false;
     protected $fillable = [
         'DATA_DATE',
