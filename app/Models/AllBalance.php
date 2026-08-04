@@ -10,6 +10,7 @@ class AllBalance extends Model
     public $timestamps = false;
 
     protected $fillable = [
+        'accounte_date',
         'identity_type',
         'account_type',
         'account_status',
@@ -20,6 +21,7 @@ class AllBalance extends Model
     ];
 
     protected $casts = [
+        'account_date'     => 'date',
         'balance'          => 'float',
         'reserved_balance' => 'float',
         'unclear_balance'  => 'float',

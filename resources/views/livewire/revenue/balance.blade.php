@@ -3,18 +3,31 @@
 use App\Models\AllBalance;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
+use Carbon\Carbon;
 
 new class extends Component {
 
     use WithPagination;
 
+    public string $account_date   = '';
     public string $identity_type  = '';
     public string $account_type   = '';
     public string $account_status = '';
     public bool   $searched       = false;
 
+    public function mount()
+    {
+        $this->account_date = Carbon::yesterday()->format('Y-m-d');
+    }
+
     public function search()
     {
+        $this->validate([
+            'account_date' => 'required|date',
+        ], [
+            'account_date.required' => 'La date est obligatoire.',
+        ]);
+
         $this->resetPage();
         $this->searched = true;
     }
@@ -59,7 +72,8 @@ new class extends Component {
             ];
         }
 
-        $query = AllBalance::query();
+        $query = AllBalance::query()
+            ->whereDate('account_date', $this->account_date);
 
         if ($this->identity_type) {
             $query->where('identity_type', $this->identity_type);
@@ -103,7 +117,17 @@ new class extends Component {
             All Balances
         </p>
 
-        <div style="display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; margin-bottom:12px;">
+        <div style="display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:12px; margin-bottom:12px;">
+
+            <div>
+                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date <span style="color:#E24B4A;">*</span></label>
+                <input type="date"
+                       wire:model="account_date"
+                       style="width:100%; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
+                @error('account_date')
+                    <p style="font-size:10px; color:#E24B4A; margin:3px 0 0;">{{ $message }}</p>
+                @enderror
+            </div>
 
             <div>
                 <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Identity Type</label>
@@ -168,8 +192,8 @@ new class extends Component {
                     <path d="M7 10h10M7 14h6" stroke="#1B2F6E" stroke-width="1.5" stroke-linecap="round"/>
                 </svg>
             </div>
-            <p style="font-size:14px; font-weight:600; color:#111827; margin-bottom:4px;">Consulter les soldes agrégés</p>
-            <p style="font-size:12px; color:#9ca3af;">Ajustez les filtres puis cliquez sur <strong>Rechercher</strong>.</p>
+            <p style="font-size:14px; font-weight:600; color:#111827; margin-bottom:4px;">Sélectionnez une date</p>
+            <p style="font-size:12px; color:#9ca3af;">Choisissez une date puis cliquez sur <strong>Rechercher</strong>.</p>
         </div>
 
     {{-- RÉSULTATS --}}
@@ -182,6 +206,7 @@ new class extends Component {
                 <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">
                     {{ number_format($kpis['total_lignes'], 0, ',', ' ') }}
                 </p>
+                <p style="font-size:10px; color:#9ca3af; margin:3px 0 0;">{{ $account_date }}</p>
             </div>
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px; border-top:3px solid #FFC72C;">
                 <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Balance totale</p>
@@ -228,6 +253,7 @@ new class extends Component {
                     <thead>
                         <tr style="background:#F7F8FC;">
                             <th style="padding:10px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">#</th>
+                            <th style="padding:10px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Date</th>
                             <th style="padding:10px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Identity Type</th>
                             <th style="padding:10px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Account Type</th>
                             <th style="padding:10px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Statut</th>
@@ -245,6 +271,10 @@ new class extends Component {
 
                                 <td style="padding:10px 12px; color:#9ca3af;">
                                     {{ $accounts->firstItem() + $loop->index }}
+                                </td>
+
+                                <td style="padding:10px 12px; color:#6b7280; white-space:nowrap;">
+                                    {{ $acc->account_date ? \Carbon\Carbon::parse($acc->account_date)->format('d/m/Y') : '—' }}
                                 </td>
 
                                 <td style="padding:10px 12px; color:#374151; white-space:nowrap;">
@@ -292,8 +322,8 @@ new class extends Component {
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="8" style="padding:40px; text-align:center; color:#9ca3af; font-size:13px;">
-                                    Aucune ligne trouvée.
+                                <td colspan="9" style="padding:40px; text-align:center; color:#9ca3af; font-size:13px;">
+                                    Aucune ligne trouvée pour cette date.
                                 </td>
                             </tr>
                         @endforelse
