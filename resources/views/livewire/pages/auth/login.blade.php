@@ -32,10 +32,10 @@ new #[Layout('layouts.guest')] class extends Component
         overflow:hidden;
     ">
     {{-- Image de fond via balise --}}
-    <img src="build/images/dmoney_office.jpg"
-         alt=""
-         style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:0;">
-
+    <img src="{{ asset('build/images/dmoney_office.jpg') }}"
+     alt=""
+     style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:0;">
+     
     {{-- Overlay sombre --}}
     <div style="position:absolute; inset:0; background:rgba(11,25,70,0.30); z-index:1;"></div>
 
