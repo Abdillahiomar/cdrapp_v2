@@ -41,11 +41,11 @@ new class extends Component {
                 txn_type_name,
                 alias,
                 SUM(nb_transactions)    AS nb_transactions,
-                SUM(volume_total)       AS volume_total,
-                SUM(revenus)            AS revenus,
-                SUM(frais)              AS frais,
-                SUM(commission)         AS commission,
-                SUM(taxe)               AS taxe
+                SUM(volume_total)*100       AS volume_total,
+                SUM(revenus)*100            AS revenus,
+                SUM(frais)*100              AS frais,
+                SUM(commission)*100         AS commission,
+                SUM(taxe)*100               AS taxe
             ')
             ->groupBy('txn_type_name', 'alias')
             ->orderByDesc('nb_transactions')
@@ -72,9 +72,9 @@ new class extends Component {
             ->selectRaw('
                 alias,
                 txn_type_name,
-                SUM(nb_transactions) AS nb,
-                SUM(volume_total)    AS volume,
-                SUM(revenus)         AS revenus
+                SUM(nb_transactions)*100 AS nb,
+                SUM(volume_total)*100    AS volume,
+                SUM(revenus)*100         AS revenus
             ')
             ->groupBy('alias', 'txn_type_name')
             ->get()
