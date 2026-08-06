@@ -13,10 +13,7 @@ use Illuminate\Support\Facades\DB;
 class AggregDashboard extends Command
 {
     protected $signature   = 'dashboard:agreger {--date= : Date Y-m-d (défaut: hier)} {--all : Tout recalculer depuis le début}';
-    protected $description = 'Agrège les transactions dans dashboard_aggregations';
-
-    // Statut des transactions à agréger (valeur exacte en base)
-    private const STATUT_COMPLETED = 'Completed';
+    protected $description = 'Agrège les transactions dans dashboard_aggregations (tous statuts)';
 
     public function handle(): void
     {
@@ -42,11 +39,13 @@ class AggregDashboard extends Command
         // Supprime les anciennes lignes du jour pour recalculer proprement
         DashboardAggregation::whereDate('jour', $date)->delete();
 
+        // NOTE : plus de filtre sur le statut — on agrège TOUS les statuts
+        // (Completed, Failed, etc.) car le dashboard a besoin des échecs
+        // pour calculer taux de réussite, taux d'échec et motifs d'échec.
         $rows = Transaction::query()
             ->join('transaction_types', 'fact_txn_v2.txn_index', '=', 'transaction_types.txn_index')
             ->where('fact_txn_v2.transaction_initiated_time', '>=', $debut)
             ->where('fact_txn_v2.transaction_initiated_time', '<',  $fin)
-            ->where('fact_txn_v2.status', '=', self::STATUT_COMPLETED)
             ->selectRaw("
                 fact_txn_v2.transaction_initiated_time::date  AS jour,
                 fact_txn_v2.txn_index                         AS txn_index,
@@ -80,9 +79,8 @@ class AggregDashboard extends Command
         $this->warn('Recalcul complet — suppression de toutes les agrégations...');
         DashboardAggregation::truncate();
 
-        // Récupère toutes les dates distinctes dans fact_txn_v2 (transactions complétées uniquement)
+        // Toutes les dates distinctes (tous statuts confondus)
         $dates = Transaction::query()
-            ->where('status', '=', self::STATUT_COMPLETED)
             ->selectRaw('transaction_initiated_time::date as jour')
             ->groupBy(DB::raw('transaction_initiated_time::date'))
             ->orderBy('jour')
@@ -92,7 +90,6 @@ class AggregDashboard extends Command
         $bar->start();
 
         foreach ($dates as $date) {
-            // $date peut être un objet Carbon ou une chaîne selon le driver : on normalise
             $jour = $date instanceof \DateTimeInterface
                 ? $date->format('Y-m-d')
                 : Carbon::parse($date)->toDateString();
