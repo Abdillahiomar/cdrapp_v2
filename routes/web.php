@@ -20,6 +20,7 @@ Volt::route('/transactions', 'transactions.index')->name('transactions.index');
 
 Volt::route('/summary', 'transactions.summary')->name('transactions.summary')->middleware('auth');
 
+Volt::route('/Manager_dashboard', 'dashboard.manager_dashboard')->name('dashboard.manager');
 Volt::route('/tableau_de_bord', 'dashboard.index')->name('dashboard.index');
 Volt::route('/tableau_de_bord_revenue', 'dashboard.show')->name('dashboard.show');
 Volt::route('/reporting/transactions', 'dashboard.transactions-dashboard')->name('reporting.transactions');

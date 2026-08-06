@@ -29,7 +29,7 @@
         <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:4px;">Principal</p>
 
         @can('dashboard.view')
-            <a href="{{ route('dashboard.index') }}" wire:navigate
+            <a href="{{ route('dashboard.manager') }}" wire:navigate
                style="{{ request()->routeIs('dashboard.index') ? $linkActive : $linkInactive }}">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
                     <rect x="1" y="1" width="6" height="6" rx="1.5"/>
@@ -37,7 +37,7 @@
                     <rect x="1" y="9" width="6" height="6" rx="1.5"/>
                     <rect x="9" y="9" width="6" height="6" rx="1.5"/>
                 </svg>
-                Tableau de bord - Revenue
+                Tableau de bord - Manager
                 @if(request()->routeIs('dashboard.index'))
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
@@ -55,6 +55,22 @@
                 </svg>
                 Tableau de bord - Transactions
                 @if(request()->routeIs('dashboard.show'))
+                    <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
+                @endif
+            </a>
+        @endcan
+
+        @can('dashboard.view')
+            <a href="{{ route('dashboard.index') }}" wire:navigate
+               style="{{ request()->routeIs('dashboard.index') ? $linkActive : $linkInactive }}">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
+                    <rect x="1" y="1" width="6" height="6" rx="1.5"/>
+                    <rect x="9" y="1" width="6" height="6" rx="1.5"/>
+                    <rect x="1" y="9" width="6" height="6" rx="1.5"/>
+                    <rect x="9" y="9" width="6" height="6" rx="1.5"/>
+                </svg>
+                Tableau de bord - Revenue
+                @if(request()->routeIs('dashboard.index'))
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
             </a>
