@@ -149,6 +149,9 @@ new class extends Component {
         return [
             'debut'   => $debut,
             'fin'     => $fin,
+            'serieJours'  => $graph['jours'],    // ← ces
+            'serieVolume' => $graph['volume'],   // ← trois
+            'serieTxn'    => $graph['txn'],      // ← lignes
             'kpi'     => [
                 'volume' => [
                     'valeur'    => $actuel['volume'],
