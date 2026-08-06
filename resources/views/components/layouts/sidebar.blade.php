@@ -30,7 +30,7 @@
 
         @can('dashboard.view')
             <a href="{{ route('dashboard.manager') }}" wire:navigate
-               style="{{ request()->routeIs('dashboard.index') ? $linkActive : $linkInactive }}">
+               style="{{ request()->routeIs('dashboard.manager') ? $linkActive : $linkInactive }}">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
                     <rect x="1" y="1" width="6" height="6" rx="1.5"/>
                     <rect x="9" y="1" width="6" height="6" rx="1.5"/>
@@ -38,7 +38,7 @@
                     <rect x="9" y="9" width="6" height="6" rx="1.5"/>
                 </svg>
                 Tableau de bord - Manager
-                @if(request()->routeIs('dashboard.index'))
+                @if(request()->routeIs('dashboard.manager'))
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
             </a>
