@@ -107,9 +107,41 @@ new class extends Component {
             ->all();
     }
 
+    /** Séries jour par jour pour le graphique principal. */
+    private function seriesGraphique(string $debut, string $fin): array
+    {
+        // Volume abouti (Completed) par jour
+        $volume = DashboardAggregation::query()
+            ->where('trans_status', 'Completed')
+            ->whereBetween('jour', [$debut, $fin])
+            ->groupBy('jour')
+            ->orderBy('jour')
+            ->selectRaw('jour, SUM(volume_total) as v')
+            ->pluck('v', 'jour');
+
+        // Nombre de transactions (tous statuts) par jour
+        $txn = DashboardAggregation::query()
+            ->whereBetween('jour', [$debut, $fin])
+            ->groupBy('jour')
+            ->orderBy('jour')
+            ->selectRaw('jour, SUM(nb_transactions) as v')
+            ->pluck('v', 'jour');
+
+        // Union ordonnée des jours présents (les deux séries alignées)
+        $jours = $txn->keys()->merge($volume->keys())->unique()->sort()->values();
+
+        return [
+            'jours'  => $jours->all(),
+            'volume' => $jours->map(fn ($j) => (float) ($volume[$j] ?? 0))->all(),
+            'txn'    => $jours->map(fn ($j) => (int) ($txn[$j] ?? 0))->all(),
+        ];
+    }
+
     public function with(): array
     {
         [$debut, $fin, $debutPrec, $finPrec] = $this->bornes();
+
+        $graph = $this->seriesGraphique($debut, $fin);
 
         $actuel    = $this->mesures($debut, $fin);
         $precedent = $this->mesures($debutPrec, $finPrec);
@@ -136,6 +168,9 @@ new class extends Component {
                     'valeur'    => $actuel['revenus'],
                     'variation' => $this->variation($actuel['revenus'], $precedent['revenus']),
                 ],
+                    'serieJours'  => $graph['jours'],
+                    'serieVolume' => $graph['volume'],
+                    'serieTxn'    => $graph['txn'],
             ],
         ];
     }
@@ -219,5 +254,13 @@ new class extends Component {
             'hint'      => 'Commission − frais',
         ])
     </div>
+
+    {{-- Graphique narratif principal (étape 2) --}}
+    @include('livewire.dashboard-partials.main-chart', [
+        'serieJours'  => $serieJours,
+        'serieVolume' => $serieVolume,
+        'serieTxn'    => $serieTxn,
+        'periode'     => $periode,
+    ])
 
 </div>
