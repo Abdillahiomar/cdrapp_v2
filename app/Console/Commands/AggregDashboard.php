@@ -95,7 +95,7 @@ class AggregDashboard extends Command
                 fact_txn_v2.status                            AS trans_status,
                 COUNT(*)                                       AS nb_transactions,
                 SUM(fact_txn_v2.actual_amount)                AS volume_total,
-                SUM(fact_txn_v2.commission_amount - fact_txn_v2.charge_amount) AS revenus,
+                SUM(fact_txn_v2.charge_amount - fact_txn_v2.commission_amount) AS revenus,
                 SUM(fact_txn_v2.charge_amount)                AS frais,
                 SUM(fact_txn_v2.commission_amount)            AS commission
             ")
@@ -120,7 +120,7 @@ class AggregDashboard extends Command
 
         $this->line("  {$date} : {$nbLignes} lignes");
     }
-    
+
     private function aggregerTout(): void
     {
         $this->warn('Recalcul complet — suppression de toutes les agrégations...');
