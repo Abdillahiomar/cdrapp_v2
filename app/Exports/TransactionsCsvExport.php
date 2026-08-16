@@ -36,7 +36,7 @@ class TransactionsCsvExport implements FromQuery, WithHeadings, WithMapping, Wit
         return $this->query;
     }
 
-    public function csvSettings(): array
+    public function getCsvSettings(): array
     {
         return [
             'delimiter' => ';',

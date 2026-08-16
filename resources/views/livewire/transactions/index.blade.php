@@ -168,27 +168,27 @@ new class extends Component {
         ];
     }
 
+    public function exportExcel()
+    {
+        ini_set('memory_limit', '1024M');
+        set_time_limit(600);
+
+        return \Maatwebsite\Excel\Facades\Excel::download(
+            new \App\Exports\TransactionsExcelExport($this->buildQuery()),
+            'transactions_' . now()->format('Ymd_His') . '.xlsx'
+        );
+    }
+
     public function exportCsv()
     {
         ini_set('memory_limit', '1024M');
         set_time_limit(600);
 
         return \Maatwebsite\Excel\Facades\Excel::download(
-            new \App\Exports\TransactionsExport($this->buildQuery()),
+            new \App\Exports\TransactionsCsvExport($this->buildQuery()),
             'transactions_' . now()->format('Ymd_His') . '.csv',
             \Maatwebsite\Excel\Excel::CSV,
-            ['Content-Type' => 'text/csv']
-        );
-    }
-
-    public function exportExcel()
-    {
-        ini_set('memory_limit', '1024M'); 
-        set_time_limit(600);
-
-        return \Maatwebsite\Excel\Facades\Excel::download(
-            new \App\Exports\TransactionsExport($this->buildQuery()),
-            'transactions_' . now()->format('Ymd_His') . '.xlsx'
+            ['Content-Type' => 'text/csv; charset=UTF-8']
         );
     }
 
