@@ -170,76 +170,15 @@ new class extends Component {
 
     public function exportCsv()
     {
+        ini_set('memory_limit', '1024M');
         set_time_limit(600);
 
-        $filename = 'transactions_' . now()->format('Ymd_His') . '.csv';
-
-        // 1) Pré-charger les libellés UNE fois (petites tables) -> pas de N+1
-        $typeNames = \DB::table('transaction_types')
-            ->select('txn_index', 'txn_type_name')
-            ->get()
-            ->keyBy('txn_index')
-            ->map(fn($r) => $r->txn_type_name);
-
-        $reasonNames = \DB::table('reason_types')
-            ->select('reason_index', 'reason_name')
-            ->get()
-            ->keyBy('reason_index')
-            ->map(fn($r) => $r->reason_name);
-
-        // 2) Query filtrée, SANS relations Eloquent (on résout en mémoire)
-        $query = $this->applyFilters(\App\Models\Transaction::query());
-
-        return response()->streamDownload(function () use ($query, $typeNames, $reasonNames) {
-
-            if (ob_get_level()) ob_end_clean();
-
-            $handle = fopen('php://output', 'w');
-            fprintf($handle, chr(0xEF) . chr(0xBB) . chr(0xBF));
-
-            fputcsv($handle, [
-                '#', 'Date', 'Transaction ID', 'Statut', 'Canal', 'Reason',
-                'Transaction Type', 'Debit Party', 'Credit Party',
-                'Debit Balance Avant', 'Debit Balance Apres',
-                'Credit Balance Avant', 'Credit Balance Apres',
-                'Amount', 'Fee', 'Commission',
-            ], ';');
-
-            $index = 1;
-
-            foreach ($query->cursor() as $t) {
-                fputcsv($handle, [
-                    $index++,
-                    $t->transaction_initiated_time
-                        ? \Carbon\Carbon::parse($t->transaction_initiated_time)->format('d/m/Y H:i')
-                        : '',
-                    $t->transaction_id,
-                    $t->status,
-                    $t->channel ?? '',
-                    // Résolution en mémoire (pas de requête SQL)
-                    $reasonNames[$t->reason_index] ?? '',
-                    $typeNames[$t->txn_index] ?? $t->transaction_type ?? $t->txn_index,
-                    $t->debit_party_identifier,
-                    $t->credit_party_identifier,
-                    $t->balance_before_debit  * 100,
-                    $t->balance_after_debit   * 100,
-                    $t->balance_before_credit * 100,
-                    $t->balance_after_credit  * 100,
-                    $t->actual_amount     * 100,
-                    $t->charge_amount     * 100,
-                    $t->commission_amount * 100,
-                ], ';');
-
-                if ($index % 1000 === 0) flush();
-            }
-
-            fclose($handle);
-
-        }, $filename, [
-            'Content-Type'        => 'text/csv; charset=UTF-8',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-            'X-Accel-Buffering'   => 'no',
-        ]);
+        return \Maatwebsite\Excel\Facades\Excel::download(
+            new \App\Exports\TransactionsExport($this->buildQuery()),
+            'transactions_' . now()->format('Ymd_His') . '.csv',
+            \Maatwebsite\Excel\Excel::CSV,
+            ['Content-Type' => 'text/csv']
+        );
     }
 
     public function exportExcel()

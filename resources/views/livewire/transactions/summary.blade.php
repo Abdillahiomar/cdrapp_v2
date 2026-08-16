@@ -519,7 +519,7 @@ new class extends Component {
                                     </div>
                                 </td>
                                 <td style="padding:10px 14px; text-align:right; color:#374151;">
-                                    {{ number_format($row['volume_total'], 0, ',', ' ') }}
+                                    {{ number_format($row['volume_total']*100, 0, ',', ' ') }}
                                 </td>
                                 <td style="padding:10px 14px; text-align:right; color:#374151;">
                                     {{ number_format($row['frais'], 0, ',', ' ') }}

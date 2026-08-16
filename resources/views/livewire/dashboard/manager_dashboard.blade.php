@@ -254,7 +254,7 @@ new class extends Component {
             'spark'     => [],
             'sparkId'   => 'spark-revenus',
             'sparkColor'=> '#B8860B',
-            'hint'      => 'Commission − frais',
+            'hint'      => 'Frais - Commission',
         ])
     </div>
 
