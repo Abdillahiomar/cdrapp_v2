@@ -15,6 +15,9 @@ new class extends Component {
     public string $region         = '';
     public bool   $searched       = false;
 
+    public $date_debut = '';
+    public $date_fin = '';
+
     public ?string $selectedId   = null;
     public bool    $showModal     = false;
 
@@ -43,7 +46,9 @@ new class extends Component {
         $this->activity       = '';
         $this->company_status = '';
         $this->region         = '';
-        $this->searched       = false;
+        $this->searched       = '';
+        $this->date_debut = ''; 
+        $this->date_fin = '';
         $this->resetPage();
     }
 
