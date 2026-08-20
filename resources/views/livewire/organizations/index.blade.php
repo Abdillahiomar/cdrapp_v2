@@ -42,13 +42,12 @@ new class extends Component {
     public function resetFilters(): void
     {
         $this->short_code     = '';
-        $this->source_datetime     = '';
         $this->activity       = '';
         $this->company_status = '';
         $this->region         = '';
-        $this->searched       = '';
-        $this->date_debut = ''; 
-        $this->date_fin = '';
+        $this->date_debut     = '';
+        $this->date_fin       = '';
+        $this->searched       = false;
         $this->resetPage();
     }
 
@@ -81,8 +80,12 @@ new class extends Component {
 
         $query = KycOrganization::query();
 
-       if ($this->date_debut)       $query->whereDate('source_datetime', '>=', $this->date_debut);
-        if ($this->date_fin)         $query->whereDate('source_datetime', '<=', $this->date_fin);
+       if ($this->date_debut) {
+            $query->where('source_datetime', '>=', $this->date_debut . ' 00:00:00');
+        }
+        if ($this->date_fin) {
+            $query->where('source_datetime', '<=', $this->date_fin . ' 23:59:59');
+        }
         if ($this->short_code) {
             $query->where('short_code', 'like', '%' . $this->short_code . '%');
         }
