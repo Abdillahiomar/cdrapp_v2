@@ -39,6 +39,7 @@ new class extends Component {
     public function resetFilters(): void
     {
         $this->short_code     = '';
+        $this->source_datetime     = '';
         $this->activity       = '';
         $this->company_status = '';
         $this->region         = '';
@@ -75,6 +76,8 @@ new class extends Component {
 
         $query = KycOrganization::query();
 
+       if ($this->date_debut)       $query->whereDate('source_datetime', '>=', $this->date_debut);
+        if ($this->date_fin)         $query->whereDate('source_datetime', '<=', $this->date_fin);
         if ($this->short_code) {
             $query->where('short_code', 'like', '%' . $this->short_code . '%');
         }
@@ -111,9 +114,15 @@ new class extends Component {
 
         <div style="display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:12px; margin-bottom:12px;">
 
+             <div>
+                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date début</label>
+                <input type="date" wire:model="date_debut"
+                       style="width:100%; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
+            </div>
+
             <div>
-                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Short Code</label>
-                <input type="text" wire:model="short_code" placeholder="Ex: 5581"
+                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date fin</label>
+                <input type="date" wire:model="date_fin"
                        style="width:100%; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
             </div>
 
@@ -180,26 +189,30 @@ new class extends Component {
                 <table style="width:100%; border-collapse:collapse; font-size:13px;">
                     <thead>
                         <tr style="background:#f9fafb; text-align:left; color:#6b7280; font-size:11px; text-transform:uppercase;">
-                            <th style="padding:10px 16px;">Short Code</th>
+                        <th style="padding:10px 16px;">CREATION DATE.</th>    
+                        <th style="padding:10px 16px;">Short Code</th>
                             <th style="padding:10px 16px;">Représentant légal</th>
                             <th style="padding:10px 16px;">Activité</th>
                             <th style="padding:10px 16px;">Statut</th>
                             <th style="padding:10px 16px;">Région</th>
+                            <th style="padding:10px 16px;">Segment</th>
                             <th style="padding:10px 16px;">MSISDN</th>
-                            <th style="padding:10px 16px;">Enreg.</th>
+                            
                             <th style="padding:10px 16px;"></th>
                         </tr>
                     </thead>
                     <tbody>
                         @foreach($organizations as $org)
                             <tr style="border-top:1px solid #f0f0f0;">
+                                <td style="padding:10px 16px; color:#6b7280;">{{ $org->source_datetime?->format('d/m/Y') ?? '—' }}</td>
                                 <td style="padding:10px 16px; font-weight:600; color:#111827;">{{ $org->short_code ?? '—' }}</td>
                                 <td style="padding:10px 16px; color:#374151;">{{ $org->legal_representative ?? '—' }}</td>
                                 <td style="padding:10px 16px; color:#374151;">{{ $org->activity ?? '—' }}</td>
                                 <td style="padding:10px 16px; color:#374151;">{{ $org->company_status ?? '—' }}</td>
                                 <td style="padding:10px 16px; color:#374151;">{{ $org->region ?? '—' }}</td>
+                                <td style="padding:10px 16px; color:#374151;">{{ $org->org_profile ?? '—' }}</td>
                                 <td style="padding:10px 16px; color:#374151;">{{ $org->notif_msisdn ?? '—' }}</td>
-                                <td style="padding:10px 16px; color:#6b7280;">{{ $org->source_datetime?->format('d/m/Y') ?? '—' }}</td>
+                                
                                 <td style="padding:10px 16px;">
                                     <button wire:click="voirDetail('{{ $org->unique_system_id }}')"
                                             style="background:#eef2ff; color:#1B2F6E; font-size:12px; font-weight:600; padding:5px 12px; border-radius:6px; border:none; cursor:pointer;">
