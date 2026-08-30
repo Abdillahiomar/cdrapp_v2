@@ -33,6 +33,9 @@ Volt::route('/organizations', 'organizations.index')->name('organizations.index'
 Volt::route('/daily-report', 'dashboard.dailly')->name('daily-report.index')->middleware('auth');
 Volt::route('/revenue-accounts', 'revenue.index')->name('revenue.index')->middleware('auth');
 Volt::route('/all_accounts_balance', 'revenue.balance')->name('balances')->middleware('auth');
+
+Volt::route('finance/bank-balances', 'finance.bank-balances')->name('finance.bank-balances');
+
 Volt::route('/amana_report', 'amana_report.index')->name('amana_report.index')->middleware('auth');
 Volt::route('/ancien_cdrapp', 'transactions.old_transactions')->name('ancien_cdrapp')->middleware('auth');
 Volt::route('/admin/roles', 'admin.roles.index')->name('admin.roles.index')->middleware(['auth', 'permission:admin.roles.view']);

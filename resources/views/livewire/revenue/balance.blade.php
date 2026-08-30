@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\AllBalance;
+use App\Models\Transaction;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 use Carbon\Carbon;
@@ -61,6 +62,7 @@ new class extends Component {
             ->distinct()
             ->orderBy('account_status')
             ->pluck('account_status');
+            
 
         if (!$this->searched) {
             return [
@@ -96,7 +98,66 @@ new class extends Component {
             'total_unclear'  => $kpisQuery->sum('unclear_balance'),
             'total_general'  => $kpisQuery->sum('total'),
         ];
-
+        
+        // ─── Money En Circulation ────────────────────────────────
+        // = Balance totale (all_balances) − somme actual_amount des transactions
+        //   "E-Money Destroy" de la même date (fact_txn_v2).
+        //
+        // fact_txn_v2 ne stocke pas les libellés : on résout d'abord les index
+        // correspondant à "E-Money Destroy" dans les tables de référence, puis
+        // on filtre sur les entiers (txn_index / reason_index) — évite les
+        // jointures sur types incompatibles (reason_index varchar vs int).
+        
+        $labelDestroy = 'E-Money Destroy';
+        
+        // Index côté transaction_types
+        $txnIndexes = \DB::table('transaction_types')
+            ->whereRaw('LOWER(TRIM(txn_type_name)) = ?', [strtolower($labelDestroy)])
+            ->pluck('txn_index')
+            ->map(fn ($v) => (int) $v)
+            ->all();
+        
+        // Index côté reason_types (reason_index est varchar → cast en int)
+        $reasonIndexes = \DB::table('reason_types')
+            ->whereRaw('LOWER(TRIM(reason_name)) = ?', [strtolower($labelDestroy)])
+            ->pluck('reason_index')
+            ->map(fn ($v) => (int) $v)
+            ->all();
+        
+        // Somme des montants E-Money Destroy pour la date sélectionnée
+        $destroyQuery = \DB::table('fact_txn_v2')
+            ->where('transaction_initiated_time', '>=', $this->account_date . ' 00:00:00')
+            ->where('transaction_initiated_time', '<',  \Carbon\Carbon::parse($this->account_date)->addDay()->format('Y-m-d') . ' 00:00:00');
+        
+        $destroyQuery->where(function ($q) use ($txnIndexes, $reasonIndexes) {
+            if (!empty($txnIndexes)) {
+                $q->orWhereIn('txn_index', $txnIndexes);
+            }
+            if (!empty($reasonIndexes)) {
+                $q->orWhereIn('reason_index', $reasonIndexes);
+            }
+        });
+        
+        
+        
+       
+        
+        
+        // ─── Money En Circulation ────────────────────────────────
+        // = Balance totale (all_balances) − somme des balances des comptes
+        //   "SP E-Money Destroy Account" de la même date sélectionnée.
+        $eMoneyDestroyQuery = AllBalance::query()
+            ->where('account_type', 'SP E-Money Destroy Account')
+            ->whereDate('account_date', $this->account_date);
+        
+        $totalDestroy = (float) $eMoneyDestroyQuery->sum('balance');
+        
+        $moneyEnCirculation = (float) $kpis['total_balance'] - $totalDestroy;
+        
+        $kpis['money_en_circulation'] = $moneyEnCirculation;
+        $kpis['total_Destroy']        = $totalDestroy;
+                
+       
         return [
             'accounts'      => $query->orderByDesc('total')->paginate(50),
             'kpis'          => $kpis,
@@ -216,26 +277,23 @@ new class extends Component {
                 <p style="font-size:10px; color:#9ca3af; margin:3px 0 0;">DJF</p>
             </div>
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px; border-top:3px solid #378ADD;">
-                <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Reserved balance</p>
+                <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Total des E-Money Destroy</p>
                 <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">
-                    {{ number_format($kpis['total_reserved'], 0, ',', ' ') }}
+                    {{ number_format($kpis['total_Destroy'], 0, ',', ' ') }}
                 </p>
                 <p style="font-size:10px; color:#9ca3af; margin:3px 0 0;">DJF</p>
             </div>
-            <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px; border-top:3px solid #E24B4A;">
-                <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Unclear balance</p>
+            
+          
+            
+            <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px; border-top:3px solid #378ADD;">
+                <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Money En Circulation</p>
                 <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">
-                    {{ number_format($kpis['total_unclear'], 0, ',', ' ') }}
+                    {{ number_format($kpis['money_en_circulation'], 0, ',', ' ') }}
                 </p>
                 <p style="font-size:10px; color:#9ca3af; margin:3px 0 0;">DJF</p>
             </div>
-            <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px; border-top:3px solid #005C2B;">
-                <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Total général</p>
-                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">
-                    {{ number_format($kpis['total_general'], 0, ',', ' ') }}
-                </p>
-                <p style="font-size:10px; color:#9ca3af; margin:3px 0 0;">DJF</p>
-            </div>
+           
         </div>
 
         {{-- TABLEAU --}}
