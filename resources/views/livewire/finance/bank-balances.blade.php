@@ -2,6 +2,7 @@
 
 use App\Models\Bank;
 use App\Models\BankAccount;
+use App\Models\AllBalance;
 use App\Models\BankBalance;
 use Livewire\Volt\Component;
 use Carbon\Carbon;
