@@ -133,15 +133,15 @@
         @endcan
 
         
-            <a href="{{ route('revenue.index') }}" wire:navigate
-               style="{{ request()->routeIs('revenue.*') ? $linkActive : $linkInactive }}">
+            <a href="{{ route('finance.bank-balances') }}" wire:navigate
+               style="{{ request()->routeIs('finance.bank-balances.*') ? $linkActive : $linkInactive }}">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
                     <rect x="2" y="5" width="12" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/>
                     <path d="M5 5V4a3 3 0 016 0v1"/>
                     <circle cx="8" cy="9" r="1.5"/>
                 </svg>
-                Revenue Accounts
-                @if(request()->routeIs('revenue.*'))
+                Relevés Bancaire
+                @if(request()->routeIs('finance.bank-balances.*'))
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
             </a>

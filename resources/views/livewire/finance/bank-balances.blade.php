@@ -1,12 +1,14 @@
 <?php
 
+use App\Models\Bank;
+use App\Models\BankAccount;
 use App\Models\BankBalance;
 use Livewire\Volt\Component;
 use Carbon\Carbon;
 
 new class extends Component {
     public string $balance_date = '';
-    public array $rows = []; // [id, bank_name, account_label, balance, notes]
+    public array $rows = []; // [id, bank_id, bank_account_id, balance, notes]
     public bool $saved = false;
 
     public function mount()
@@ -15,7 +17,7 @@ new class extends Component {
         $this->loadRows();
     }
 
-    public function updatedBalanceDate()
+    public function updatedBalanceDate(): void
     {
         $this->saved = false;
         $this->loadRows();
@@ -23,38 +25,44 @@ new class extends Component {
 
     protected function loadRows(): void
     {
-        $existing = BankBalance::query()
+        $existing = BankBalance::with('account.bank')
             ->whereDate('balance_date', $this->balance_date)
-            ->orderBy('bank_name')
-            ->orderBy('account_label')
             ->get();
 
         if ($existing->isEmpty()) {
             $this->rows = [
-                ['id' => null, 'bank_name' => '', 'account_label' => '', 'balance' => '', 'notes' => ''],
+                ['id' => null, 'bank_id' => '', 'bank_account_id' => '', 'balance' => '', 'notes' => ''],
             ];
             return;
         }
 
         $this->rows = $existing->map(fn ($b) => [
-            'id'            => $b->id,
-            'bank_name'     => $b->bank_name,
-            'account_label' => $b->account_label,
-            'balance'       => (string) $b->balance,
-            'notes'         => $b->notes,
+            'id'              => $b->id,
+            'bank_id'         => $b->account->bank_id,
+            'bank_account_id' => $b->bank_account_id,
+            'balance'         => (string) $b->balance,
+            'notes'           => $b->notes,
         ])->all();
     }
 
     public function addRow(): void
     {
-        $this->rows[] = ['id' => null, 'bank_name' => '', 'account_label' => '', 'balance' => '', 'notes' => ''];
+        $this->rows[] = ['id' => null, 'bank_id' => '', 'bank_account_id' => '', 'balance' => '', 'notes' => ''];
+    }
+
+    // Quand on change la banque d'une ligne, on vide le compte sélectionné
+    public function updatedRows($value, $key): void
+    {
+        if (str_ends_with($key, '.bank_id')) {
+            $index = explode('.', $key)[0];
+            $this->rows[$index]['bank_account_id'] = '';
+        }
     }
 
     public function removeRow(int $index): void
     {
         $row = $this->rows[$index] ?? null;
 
-        // Si la ligne existait déjà en base, on la supprime réellement
         if ($row && $row['id']) {
             BankBalance::destroy($row['id']);
         }
@@ -70,30 +78,26 @@ new class extends Component {
     public function save(): void
     {
         $this->validate([
-            'balance_date'            => 'required|date',
-            'rows'                    => 'required|array|min:1',
-            'rows.*.bank_name'        => 'required|string|max:255',
-            'rows.*.account_label'    => 'required|string|max:255',
-            'rows.*.balance'          => 'required|numeric',
-            'rows.*.notes'            => 'nullable|string|max:500',
+            'balance_date'              => 'required|date',
+            'rows'                      => 'required|array|min:1',
+            'rows.*.bank_account_id'    => 'required|exists:bank_accounts,id',
+            'rows.*.balance'            => 'required|numeric',
+            'rows.*.notes'              => 'nullable|string|max:500',
         ], [
-            'rows.*.bank_name.required'     => 'Le nom de la banque est obligatoire.',
-            'rows.*.account_label.required' => 'Le libellé du compte est obligatoire.',
-            'rows.*.balance.required'       => 'Le solde est obligatoire.',
-            'rows.*.balance.numeric'        => 'Le solde doit être un nombre.',
+            'rows.*.bank_account_id.required' => 'Sélectionnez un compte.',
+            'rows.*.balance.required'         => 'Le solde est obligatoire.',
+            'rows.*.balance.numeric'          => 'Le solde doit être un nombre.',
         ]);
 
         foreach ($this->rows as $i => $row) {
             $record = BankBalance::updateOrCreate(
                 [
-                    'balance_date'  => $this->balance_date,
-                    'bank_name'     => trim($row['bank_name']),
-                    'account_label' => trim($row['account_label']),
+                    'bank_account_id' => $row['bank_account_id'],
+                    'balance_date'    => $this->balance_date,
                 ],
                 [
                     'balance'    => (float) str_replace(',', '.', $row['balance']),
                     'notes'      => $row['notes'] ?: null,
-                    'currency'   => 'DJF',
                     'updated_by' => auth()->id(),
                     'created_by' => auth()->id(),
                 ]
@@ -108,20 +112,26 @@ new class extends Component {
 
     public function with(): array
     {
-        // Suggestions pour l'autocomplétion (saisie libre mais guidée)
-        $bankSuggestions = BankBalance::query()
-            ->select('bank_name')->distinct()->orderBy('bank_name')->pluck('bank_name');
+        $banks = Bank::where('is_active', true)->orderBy('name')->get();
 
-        // Total par banque + grand total pour la date affichée
-        $byBank = collect($this->rows)
-            ->filter(fn ($r) => $r['bank_name'] !== '')
-            ->groupBy('bank_name')
-            ->map(fn ($rows) => collect($rows)->sum(fn ($r) => (float) str_replace(',', '.', $r['balance'] ?: 0)));
+        $accountsByBank = BankAccount::where('is_active', true)
+            ->orderBy('account_label')
+            ->get()
+            ->groupBy('bank_id');
+
+        // Récap par banque pour la date sélectionnée
+        $entries = BankBalance::with('account.bank')
+            ->whereDate('balance_date', $this->balance_date)
+            ->get();
+
+        $byBank = $entries->groupBy(fn ($e) => $e->account->bank->name)
+            ->map(fn ($group) => $group->sum('balance'));
 
         $grandTotal = $byBank->sum();
 
         return [
-            'bankSuggestions' => $bankSuggestions,
+            'banks'           => $banks,
+            'accountsByBank'  => $accountsByBank,
             'byBank'          => $byBank,
             'grandTotal'      => $grandTotal,
         ];
@@ -145,70 +155,76 @@ new class extends Component {
             </div>
         @endif
 
-        <datalist id="bank-suggestions">
-            @foreach($bankSuggestions as $b)
-                <option value="{{ $b }}"></option>
-            @endforeach
-        </datalist>
-
-        <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:12px;">
-            <thead>
-                <tr style="background:#F7F8FC;">
-                    <th style="padding:8px 10px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Banque</th>
-                    <th style="padding:8px 10px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Compte</th>
-                    <th style="padding:8px 10px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Solde (DJF)</th>
-                    <th style="padding:8px 10px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Notes</th>
-                    <th style="padding:8px 10px; border-bottom:1px solid #e5e7eb;"></th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach($rows as $i => $row)
-                    <tr style="border-bottom:1px solid #f3f4f6;">
-                        <td style="padding:6px 10px;">
-                            <input type="text" list="bank-suggestions" wire:model="rows.{{ $i }}.bank_name"
-                                   placeholder="Ex: BCI, Bank of Africa..."
-                                   style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:12px;">
-                            @error("rows.$i.bank_name") <p style="font-size:10px; color:#E24B4A; margin:2px 0 0;">{{ $message }}</p> @enderror
-                        </td>
-                        <td style="padding:6px 10px;">
-                            <input type="text" wire:model="rows.{{ $i }}.account_label"
-                                   placeholder="Ex: Compte courant n°123456"
-                                   style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:12px;">
-                            @error("rows.$i.account_label") <p style="font-size:10px; color:#E24B4A; margin:2px 0 0;">{{ $message }}</p> @enderror
-                        </td>
-                        <td style="padding:6px 10px;">
-                            <input type="text" inputmode="decimal" wire:model="rows.{{ $i }}.balance"
-                                   placeholder="0.00"
-                                   style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:12px; text-align:right;">
-                            @error("rows.$i.balance") <p style="font-size:10px; color:#E24B4A; margin:2px 0 0;">{{ $message }}</p> @enderror
-                        </td>
-                        <td style="padding:6px 10px;">
-                            <input type="text" wire:model="rows.{{ $i }}.notes" placeholder="Optionnel"
-                                   style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:12px;">
-                        </td>
-                        <td style="padding:6px 10px; text-align:center;">
-                            <button type="button" wire:click="removeRow({{ $i }})"
-                                    style="background:#FDECEA; color:#7F1D1D; border:none; border-radius:6px; padding:5px 9px; font-size:11px; cursor:pointer;">
-                                Suppr.
-                            </button>
-                        </td>
+        @if($banks->isEmpty())
+            <div style="background:#FFF3D0; color:#7A4F00; font-size:12px; padding:10px 12px; border-radius:8px;">
+                Aucune banque configurée. Ajoutez d'abord des banques et des comptes dans la page de gestion.
+            </div>
+        @else
+            <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:12px;">
+                <thead>
+                    <tr style="background:#F7F8FC;">
+                        <th style="padding:8px 10px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Banque</th>
+                        <th style="padding:8px 10px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Compte</th>
+                        <th style="padding:8px 10px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Solde (DJF)</th>
+                        <th style="padding:8px 10px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Notes</th>
+                        <th style="padding:8px 10px; border-bottom:1px solid #e5e7eb;"></th>
                     </tr>
-                @endforeach
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    @foreach($rows as $i => $row)
+                        <tr style="border-bottom:1px solid #f3f4f6;">
+                            <td style="padding:6px 10px;">
+                                <select wire:model.live="rows.{{ $i }}.bank_id"
+                                        style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:12px; background:#fff;">
+                                    <option value="">Choisir...</option>
+                                    @foreach($banks as $bank)
+                                        <option value="{{ $bank->id }}">{{ $bank->name }}</option>
+                                    @endforeach
+                                </select>
+                            </td>
+                            <td style="padding:6px 10px;">
+                                <select wire:model="rows.{{ $i }}.bank_account_id"
+                                        style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:12px; background:#fff;">
+                                    <option value="">Choisir un compte...</option>
+                                    @foreach($accountsByBank->get($row['bank_id'], []) as $acc)
+                                        <option value="{{ $acc->id }}">{{ $acc->account_label }}</option>
+                                    @endforeach
+                                </select>
+                                @error("rows.$i.bank_account_id") <p style="font-size:10px; color:#E24B4A; margin:2px 0 0;">{{ $message }}</p> @enderror
+                            </td>
+                            <td style="padding:6px 10px;">
+                                <input type="text" inputmode="decimal" wire:model="rows.{{ $i }}.balance" placeholder="0.00"
+                                       style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:12px; text-align:right;">
+                                @error("rows.$i.balance") <p style="font-size:10px; color:#E24B4A; margin:2px 0 0;">{{ $message }}</p> @enderror
+                            </td>
+                            <td style="padding:6px 10px;">
+                                <input type="text" wire:model="rows.{{ $i }}.notes" placeholder="Optionnel"
+                                       style="width:100%; border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:12px;">
+                            </td>
+                            <td style="padding:6px 10px; text-align:center;">
+                                <button type="button" wire:click="removeRow({{ $i }})"
+                                        style="background:#FDECEA; color:#7F1D1D; border:none; border-radius:6px; padding:5px 9px; font-size:11px; cursor:pointer;">
+                                    Suppr.
+                                </button>
+                            </td>
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
 
-        <div style="display:flex; align-items:center; gap:10px;">
-            <button type="button" wire:click="addRow"
-                    style="background:#f3f4f6; color:#374151; font-size:12px; font-weight:600; padding:8px 16px; border-radius:8px; border:1px solid #e5e7eb; cursor:pointer;">
-                + Ajouter un compte
-            </button>
-            <button type="button" wire:click="save"
-                    wire:loading.attr="disabled" wire:target="save"
-                    style="background:#1B2F6E; color:#fff; font-size:13px; font-weight:600; padding:9px 22px; border-radius:8px; border:none; cursor:pointer;">
-                <span wire:loading.remove wire:target="save">Enregistrer</span>
-                <span wire:loading wire:target="save">Enregistrement...</span>
-            </button>
-        </div>
+            <div style="display:flex; align-items:center; gap:10px;">
+                <button type="button" wire:click="addRow"
+                        style="background:#f3f4f6; color:#374151; font-size:12px; font-weight:600; padding:8px 16px; border-radius:8px; border:1px solid #e5e7eb; cursor:pointer;">
+                    + Ajouter une ligne
+                </button>
+                <button type="button" wire:click="save"
+                        wire:loading.attr="disabled" wire:target="save"
+                        style="background:#1B2F6E; color:#fff; font-size:13px; font-weight:600; padding:9px 22px; border-radius:8px; border:none; cursor:pointer;">
+                    <span wire:loading.remove wire:target="save">Enregistrer</span>
+                    <span wire:loading wire:target="save">Enregistrement...</span>
+                </button>
+            </div>
+        @endif
     </div>
 
     {{-- RÉCAPITULATIF PAR BANQUE --}}
@@ -218,9 +234,9 @@ new class extends Component {
                 Récapitulatif — {{ \Carbon\Carbon::parse($balance_date)->format('d/m/Y') }}
             </p>
             <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:10px; margin-bottom:14px;">
-                @foreach($byBank as $bank => $total)
+                @foreach($byBank as $bankName => $total)
                     <div style="background:#F7F8FC; border-radius:8px; padding:10px 12px;">
-                        <p style="font-size:11px; color:#6b7280; margin:0 0 4px;">{{ $bank }}</p>
+                        <p style="font-size:11px; color:#6b7280; margin:0 0 4px;">{{ $bankName }}</p>
                         <p style="font-size:15px; font-weight:700; color:#111827; margin:0;">{{ number_format($total, 0, ',', ' ') }}</p>
                     </div>
                 @endforeach
