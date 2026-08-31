@@ -8,12 +8,14 @@ use Carbon\Carbon;
 
 new class extends Component {
     public string $balance_date = '';
+    public string $money_circulation_date = ''; // nouvelle date, indépendante
     public array $rows = []; // [id, bank_id, bank_account_id, balance, notes]
     public bool $saved = false;
 
     public function mount()
     {
         $this->balance_date = Carbon::today()->format('Y-m-d');
+        $this->money_circulation_date = $this->balance_date; // par défaut = même date, modifiable ensuite
         $this->loadRows();
     }
 
@@ -119,7 +121,6 @@ new class extends Component {
             ->get()
             ->groupBy('bank_id');
 
-        // Récap par banque pour la date sélectionnée
         $entries = BankBalance::with('account.bank')
             ->whereDate('balance_date', $this->balance_date)
             ->get();
@@ -129,11 +130,35 @@ new class extends Component {
 
         $grandTotal = $byBank->sum();
 
+        // ─── Money en Circulation, sur la date choisie par l'utilisateur ───
+        $totalBalanceAllAccounts = (float) AllBalance::query()
+            ->whereDate('account_date', $this->money_circulation_date)
+            ->sum('balance');
+
+        $totalEmoneyDestroy = (float) AllBalance::query()
+            ->where('account_type', 'SP E-Money Destroy Account')
+            ->whereDate('account_date', $this->money_circulation_date)
+            ->sum('balance');
+
+        $moneyEnCirculation = $totalBalanceAllAccounts - $totalEmoneyDestroy;
+
+        // Avertit si aucune donnée n'existe pour la date choisie (évite un ratio trompeur basé sur du vide)
+        $hasMoneyCirculationData = AllBalance::query()
+            ->whereDate('account_date', $this->money_circulation_date)
+            ->exists();
+
+        $ratioEquivalence = ($moneyEnCirculation > 0 && $hasMoneyCirculationData)
+            ? ($grandTotal / $moneyEnCirculation) * 100
+            : null;
+
         return [
-            'banks'           => $banks,
-            'accountsByBank'  => $accountsByBank,
-            'byBank'          => $byBank,
-            'grandTotal'      => $grandTotal,
+            'banks'                    => $banks,
+            'accountsByBank'           => $accountsByBank,
+            'byBank'                   => $byBank,
+            'grandTotal'               => $grandTotal,
+            'moneyEnCirculation'       => $moneyEnCirculation,
+            'ratioEquivalence'         => $ratioEquivalence,
+            'hasMoneyCirculationData'  => $hasMoneyCirculationData,
         ];
     }
 };
@@ -228,6 +253,7 @@ new class extends Component {
     </div>
 
     {{-- RÉCAPITULATIF PAR BANQUE --}}
+    {{-- RÉCAPITULATIF PAR BANQUE --}}
     @if($byBank->isNotEmpty())
         <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px;">
             <p style="font-size:13px; font-weight:600; color:#111827; margin-bottom:12px;">
@@ -241,9 +267,44 @@ new class extends Component {
                     </div>
                 @endforeach
             </div>
+
             <div style="border-top:1px solid #e5e7eb; padding-top:10px; display:flex; justify-content:space-between; align-items:center;">
                 <span style="font-size:13px; font-weight:600; color:#111827;">Total général</span>
                 <span style="font-size:18px; font-weight:700; color:#005C2B;">{{ number_format($grandTotal, 0, ',', ' ') }} DJF</span>
+            </div>
+
+            {{-- Sélecteur de date pour Money en Circulation --}}
+            <div style="border-top:1px solid #e5e7eb; padding-top:12px; margin-top:10px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="font-size:13px; font-weight:600; color:#111827;">Money en Circulation</span>
+                    <div>
+                        <label style="font-size:10px; color:#6b7280; display:block; margin-bottom:2px;">Date de comparaison</label>
+                        <input type="date" wire:model.live="money_circulation_date"
+                               style="border:1px solid #d1d5db; border-radius:6px; padding:6px 8px; font-size:12px; color:#111827; outline:none;">
+                    </div>
+                </div>
+
+                @if(!$hasMoneyCirculationData)
+                    <div style="background:#FFF3D0; color:#7A4F00; font-size:11px; padding:6px 10px; border-radius:6px; margin-bottom:8px;">
+                        Aucune donnée "All Accounts Balance" trouvée pour le {{ \Carbon\Carbon::parse($money_circulation_date)->format('d/m/Y') }}.
+                    </div>
+                @endif
+
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:11px; color:#9ca3af;">{{ \Carbon\Carbon::parse($money_circulation_date)->format('d/m/Y') }}</span>
+                    <span style="font-size:16px; font-weight:700; color:#378ADD;">{{ number_format($moneyEnCirculation, 0, ',', ' ') }} DJF</span>
+                </div>
+            </div>
+
+            <div style="border-top:1px solid #e5e7eb; padding-top:10px; margin-top:10px; display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:14px; font-weight:700; color:#111827;">Ratio d'équivalence</span>
+                @if($ratioEquivalence !== null)
+                    <span style="font-size:22px; font-weight:800; color:{{ $ratioEquivalence >= 100 ? '#005C2B' : '#E24B4A' }};">
+                        {{ number_format($ratioEquivalence, 2, ',', ' ') }} %
+                    </span>
+                @else
+                    <span style="font-size:13px; color:#9ca3af;">N/A</span>
+                @endif
             </div>
         </div>
     @endif
