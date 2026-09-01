@@ -26,6 +26,17 @@ new class extends Component {
     public array $circulaires      = [];
     public array $cycling          = [];
 
+    // Index pré-calculés
+    private array $idxMerchant = [];
+    private array $idxCashin   = [];
+    private array $idxW2b      = [];
+    private array $idxSend     = [];
+    private array $idxB2w      = [];
+    private array $idxCashout  = [];
+
+    // Messages d'erreur
+    public string $error_message = '';
+
     public function mount()
     {
         $this->date_debut = Carbon::now()->subDays(7)->format('Y-m-d');
@@ -57,212 +68,275 @@ new class extends Component {
         return 'IN (' . implode(',', $indexes) . ')';
     }
 
+    /**
+     * Vérifie si la période est valide
+     */
+    private function validatePeriod(): bool
+    {
+        $debut = Carbon::parse($this->date_debut);
+        $fin = Carbon::parse($this->date_fin);
+
+        if ($debut->gt($fin)) {
+            $this->error_message = 'La date de début doit être antérieure à la date de fin.';
+            return false;
+        }
+
+        if ($debut->diffInDays($fin) > 30) {
+            $this->error_message = 'La période ne peut pas dépasser 30 jours.';
+            return false;
+        }
+
+        return true;
+    }
+
     public function lancer()
     {
-        set_time_limit(300);
-        ini_set('memory_limit', '512M');
+        try {
+            set_time_limit(300);
+            ini_set('memory_limit', '512M');
 
-        $debut = $this->date_debut . ' 00:00:00';
-        $fin   = $this->date_fin   . ' 23:59:59';
+            // Validation
+            if (!$this->validatePeriod()) {
+                $this->analyse = false;
+                session()->flash('error', $this->error_message);
+                return;
+            }
 
-        // ── Résolution des reason_index par motif (une seule fois) ────
-        $idxMerchant = $this->inClause($this->reasonIndexesFor('merchant payment'));
-        $idxCashin   = $this->inClause($this->reasonIndexesFor('customer cash in'));
-        $idxW2b      = $this->inClause($this->reasonIndexesFor('w2b'));
-        $idxSend     = $this->inClause($this->reasonIndexesFor('send money'));
-        $idxB2w      = $this->inClause($this->reasonIndexesFor('b2w'));
-        $idxCashout  = $this->inClause($this->reasonIndexesFor('cash out'));
+            $debut = $this->date_debut . ' 00:00:00';
+            $fin   = $this->date_fin   . ' 23:59:59';
 
-        // ── 1. MP répétitifs ─────────────────────────────────────────
-        $this->repeat_mp = DB::select("
-            SELECT
-                debit_party_identifier,
-                credit_party_identifier,
-                COUNT(*) as nb_paiements
-            FROM fact_txn_v2
-            WHERE transaction_initiated_time BETWEEN ? AND ?
-              AND reason_index {$idxMerchant}
-            GROUP BY debit_party_identifier, credit_party_identifier
-            HAVING COUNT(*) > 2
-            ORDER BY nb_paiements DESC
-        ", [$debut, $fin]);
+            // Vérifier si c'est une période d'un seul jour
+            $isSingleDay = $this->date_debut === $this->date_fin;
+            
+            if ($isSingleDay) {
+                session()->flash('warning', '⚠️ L\'analyse sur une seule journée peut donner des résultats limités. Les scénarios de fraude sont souvent détectés sur plusieurs jours.');
+            }
 
-        // ── 2. Cash In répétitifs ────────────────────────────────────
-        $this->repeat_cashin = DB::select("
-            SELECT
-                debit_party_identifier,
-                credit_party_identifier,
-                COUNT(*) as nb_cashin
-            FROM fact_txn_v2
-            WHERE transaction_initiated_time BETWEEN ? AND ?
-              AND reason_index {$idxCashin}
-            GROUP BY debit_party_identifier, credit_party_identifier
-            HAVING COUNT(*) >= 2
-            ORDER BY nb_cashin DESC
-        ", [$debut, $fin]);
+            // ── Résolution des reason_index par motif (une seule fois) ────
+            $this->idxMerchant = $this->reasonIndexesFor('merchant payment');
+            $this->idxCashin   = $this->reasonIndexesFor('customer cash in');
+            $this->idxW2b      = $this->reasonIndexesFor('w2b');
+            $this->idxSend     = $this->reasonIndexesFor('send money');
+            $this->idxB2w      = $this->reasonIndexesFor('b2w');
+            $this->idxCashout  = $this->reasonIndexesFor('cash out');
 
-        // ── 3. W2B répétitifs ────────────────────────────────────────
-        $this->repeat_w2b = DB::select("
-            SELECT
-                debit_party_identifier,
-                credit_party_identifier,
-                COUNT(*) as nb_w2b
-            FROM fact_txn_v2
-            WHERE transaction_initiated_time BETWEEN ? AND ?
-              AND reason_index {$idxW2b}
-            GROUP BY debit_party_identifier, credit_party_identifier
-            HAVING COUNT(*) >= 2
-            ORDER BY nb_w2b DESC
-        ", [$debut, $fin]);
+            $idxMerchant = $this->inClause($this->idxMerchant);
+            $idxCashin   = $this->inClause($this->idxCashin);
+            $idxW2b      = $this->inClause($this->idxW2b);
+            $idxSend     = $this->inClause($this->idxSend);
+            $idxB2w      = $this->inClause($this->idxB2w);
+            $idxCashout  = $this->inClause($this->idxCashout);
 
-        // ── 4. Cash In → W2B — jointure SQL ──────────────────────────
-        $this->cashin_w2b = DB::select("
-            SELECT
-                ci.transaction_initiated_time::date        AS date,
-                ci.debit_party_identifier                  AS distributeur,
-                ci.credit_party_identifier                 AS client,
-                ci.actual_amount                           AS cashin_amount,
-                ci.transaction_initiated_time              AS cashin_time,
-                w.actual_amount                            AS w2b_amount,
-                w.transaction_initiated_time               AS w2b_time,
-                w.credit_party_identifier                  AS banque,
-                EXTRACT(EPOCH FROM (w.transaction_initiated_time - ci.transaction_initiated_time)) / 60 AS delay_minutes
-            FROM fact_txn_v2 ci
-            JOIN fact_txn_v2 w
-                ON  w.credit_party_identifier    = ci.credit_party_identifier
-                AND w.transaction_initiated_time > ci.transaction_initiated_time
-                AND w.transaction_initiated_time::date = ci.transaction_initiated_time::date
-                AND w.reason_index {$idxW2b}
-            WHERE ci.transaction_initiated_time BETWEEN ? AND ?
-              AND ci.reason_index {$idxCashin}
-            ORDER BY ci.transaction_initiated_time
-            LIMIT 1000
-        ", [$debut, $fin]);
+            // ── 1. MP répétitifs ─────────────────────────────────────────
+            $this->repeat_mp = DB::select("
+                SELECT
+                    debit_party_identifier,
+                    credit_party_identifier,
+                    COUNT(*) as nb_paiements
+                FROM fact_txn_v2
+                WHERE transaction_initiated_time BETWEEN ? AND ?
+                  AND reason_index {$idxMerchant}
+                GROUP BY debit_party_identifier, credit_party_identifier
+                HAVING COUNT(*) > 2
+                ORDER BY nb_paiements DESC
+            ", [$debut, $fin]);
 
-        // ── 5. B2W → Send → W2B — double jointure SQL ────────────────
-        $this->b2w_send_w2b = DB::select("
-            SELECT
-                b.transaction_initiated_time::date         AS date,
-                b.credit_party_identifier                  AS source_bank,
-                b.credit_party_identifier                  AS client_a,
-                b.actual_amount                            AS b2w_amount,
-                b.transaction_initiated_time               AS b2w_time,
-                s.credit_party_identifier                  AS client_b,
-                s.actual_amount                            AS send_amount,
-                s.transaction_initiated_time               AS send_time,
-                w.actual_amount                            AS w2b_amount,
-                w.transaction_initiated_time               AS w2b_time,
-                w.credit_party_identifier                  AS destination_bank,
-                EXTRACT(EPOCH FROM (s.transaction_initiated_time - b.transaction_initiated_time)) / 60 AS delay_b2w_send_min,
-                EXTRACT(EPOCH FROM (w.transaction_initiated_time - s.transaction_initiated_time)) / 60 AS delay_send_w2b_min
-            FROM fact_txn_v2 b
-            JOIN fact_txn_v2 s
-                ON  s.credit_party_identifier    = b.credit_party_identifier
-                AND s.transaction_initiated_time > b.transaction_initiated_time
-                AND s.transaction_initiated_time::date = b.transaction_initiated_time::date
-                AND s.reason_index {$idxSend}
-            JOIN fact_txn_v2 w
-                ON  w.credit_party_identifier    = s.credit_party_identifier
-                AND w.transaction_initiated_time > s.transaction_initiated_time
-                AND w.transaction_initiated_time::date = b.transaction_initiated_time::date
-                AND w.reason_index {$idxW2b}
-            WHERE b.transaction_initiated_time BETWEEN ? AND ?
-              AND b.reason_index {$idxB2w}
-            ORDER BY b.transaction_initiated_time
-            LIMIT 1000
-        ", [$debut, $fin]);
+            // ── 2. Cash In répétitifs ────────────────────────────────────
+            $this->repeat_cashin = DB::select("
+                SELECT
+                    debit_party_identifier,
+                    credit_party_identifier,
+                    COUNT(*) as nb_cashin
+                FROM fact_txn_v2
+                WHERE transaction_initiated_time BETWEEN ? AND ?
+                  AND reason_index {$idxCashin}
+                GROUP BY debit_party_identifier, credit_party_identifier
+                HAVING COUNT(*) >= 2
+                ORDER BY nb_cashin DESC
+            ", [$debut, $fin]);
 
-        // ── 6. Scénarios circulaires — SQL ────────────────────────────
-        $this->circulaires = DB::select("
-            SELECT
-                mp.transaction_initiated_time::date        AS date,
-                ci.debit_party_identifier                  AS cashin_from,
-                ci.transaction_initiated_time              AS ci_time,
-                mp.debit_party_identifier                  AS client,
-                mp.credit_party_identifier                 AS merchant,
-                mp.transaction_initiated_time              AS mp_time,
-                bco.transaction_initiated_time             AS bco_time,
-                mp.actual_amount                           AS amount,
-                bco.credit_party_identifier                AS cashout_to,
-                EXTRACT(EPOCH FROM (bco.transaction_initiated_time - mp.transaction_initiated_time)) / 60 AS delay_minutes,
-                CASE
-                    WHEN EXTRACT(EPOCH FROM (bco.transaction_initiated_time - mp.transaction_initiated_time)) / 60 < 10
-                        THEN 'Cashout rapide'
-                    WHEN mp.actual_amount >= 20000
-                        THEN 'Montant élevé'
-                    ELSE 'Activité inhabituelle'
-                END AS flags
-            FROM fact_txn_v2 mp
-            JOIN fact_txn_v2 ci
-                ON  ci.credit_party_identifier   = mp.debit_party_identifier
-                AND ci.transaction_initiated_time < mp.transaction_initiated_time
-                AND ci.transaction_initiated_time::date = mp.transaction_initiated_time::date
-                AND ci.reason_index {$idxCashin}
-            JOIN fact_txn_v2 bco
-                ON  bco.debit_party_identifier   = mp.credit_party_identifier
-                AND bco.actual_amount            = mp.actual_amount
-                AND bco.transaction_initiated_time > mp.transaction_initiated_time
-                AND bco.transaction_initiated_time::date = mp.transaction_initiated_time::date
-                AND bco.reason_index {$idxCashout}
-            WHERE mp.transaction_initiated_time BETWEEN ? AND ?
-              AND mp.reason_index {$idxMerchant}
-            ORDER BY delay_minutes ASC
-            LIMIT 500
-        ", [$debut, $fin]);
+            // ── 3. W2B répétitifs ────────────────────────────────────────
+            $this->repeat_w2b = DB::select("
+                SELECT
+                    debit_party_identifier,
+                    credit_party_identifier,
+                    COUNT(*) as nb_w2b
+                FROM fact_txn_v2
+                WHERE transaction_initiated_time BETWEEN ? AND ?
+                  AND reason_index {$idxW2b}
+                GROUP BY debit_party_identifier, credit_party_identifier
+                HAVING COUNT(*) >= 2
+                ORDER BY nb_w2b DESC
+            ", [$debut, $fin]);
 
-        // ── 7. Cycling — SQL agrégé ───────────────────────────────────
-        // Cash In → Send → W2B même agent même jour même montant
-        $this->cycling = DB::select("
-            SELECT
-                ci.transaction_initiated_time::date        AS date,
-                ci.debit_party_identifier                  AS agent,
-                COUNT(*)                                    AS nb_cycles,
-                ci.actual_amount                           AS montant_par_cycle,
-                SUM(ci.actual_amount)                       AS total_cashin_fdj,
-                SUM(w.actual_amount)                        AS total_w2b_fdj,
-                SUM(ci.actual_amount) * 0.0256              AS commission_gagnee,
-                (SUM(ci.actual_amount) * 0.0256) - (ci.actual_amount * 0.0256) AS surplus_commission,
-                AVG(EXTRACT(EPOCH FROM (w.transaction_initiated_time - ci.transaction_initiated_time)) / 60) AS avg_delay_min
-            FROM fact_txn_v2 ci
-            JOIN fact_txn_v2 s
-                ON  s.debit_party_identifier     = ci.credit_party_identifier
-                AND s.transaction_initiated_time > ci.transaction_initiated_time
-                AND s.transaction_initiated_time::date = ci.transaction_initiated_time::date
-                AND s.reason_index {$idxSend}
-                AND ABS(s.actual_amount - ci.actual_amount) / ci.actual_amount <= ?
-            JOIN fact_txn_v2 w
-                ON  w.debit_party_identifier     = s.credit_party_identifier
-                AND w.transaction_initiated_time > s.transaction_initiated_time
-                AND w.transaction_initiated_time::date = ci.transaction_initiated_time::date
-                AND w.reason_index {$idxW2b}
-            WHERE ci.transaction_initiated_time BETWEEN ? AND ?
-              AND ci.reason_index {$idxCashin}
-              AND ci.actual_amount > 0
-            GROUP BY ci.transaction_initiated_time::date, ci.debit_party_identifier, ci.actual_amount
-            HAVING COUNT(*) >= ?
-            ORDER BY nb_cycles DESC, commission_gagnee DESC
-            LIMIT 200
-        ", [
-            $this->amount_tolerance / 100,
-            $debut,
-            $fin,
-            $this->min_cycles,
-        ]);
+            // ── 4. Cash In → W2B — jointure SQL ──────────────────────────
+            // Adapter la requête selon la période
+            $timeWindow = $isSingleDay ? "INTERVAL '2 hours'" : "INTERVAL '24 hours'";
+            
+            $this->cashin_w2b = DB::select("
+                SELECT
+                    ci.transaction_initiated_time::date        AS date,
+                    ci.debit_party_identifier                  AS distributeur,
+                    ci.credit_party_identifier                 AS client,
+                    ci.actual_amount                           AS cashin_amount,
+                    ci.transaction_initiated_time              AS cashin_time,
+                    w.actual_amount                            AS w2b_amount,
+                    w.transaction_initiated_time               AS w2b_time,
+                    w.credit_party_identifier                  AS banque,
+                    EXTRACT(EPOCH FROM (w.transaction_initiated_time - ci.transaction_initiated_time)) / 60 AS delay_minutes
+                FROM fact_txn_v2 ci
+                JOIN fact_txn_v2 w
+                    ON  w.credit_party_identifier    = ci.credit_party_identifier
+                    AND w.transaction_initiated_time > ci.transaction_initiated_time
+                    AND w.transaction_initiated_time < ci.transaction_initiated_time + {$timeWindow}
+                    AND w.reason_index {$idxW2b}
+                WHERE ci.transaction_initiated_time BETWEEN ? AND ?
+                  AND ci.reason_index {$idxCashin}
+                ORDER BY ci.transaction_initiated_time
+                LIMIT 1000
+            ", [$debut, $fin]);
 
-        $toLower = fn($rows) => array_map(
-            fn($r) => array_change_key_case((array)$r, CASE_LOWER),
-            $rows
-        );
+            // ── 5. B2W → Send → W2B — double jointure SQL ────────────────
+            $timeWindow1 = $isSingleDay ? "INTERVAL '1 hour'" : "INTERVAL '6 hours'";
+            $timeWindow2 = $isSingleDay ? "INTERVAL '1 hour'" : "INTERVAL '6 hours'";
 
-        $this->repeat_mp     = $toLower($this->repeat_mp);
-        $this->repeat_cashin = $toLower($this->repeat_cashin);
-        $this->repeat_w2b    = $toLower($this->repeat_w2b);
-        $this->cashin_w2b    = $toLower($this->cashin_w2b);
-        $this->b2w_send_w2b  = $toLower($this->b2w_send_w2b);
-        $this->circulaires   = $toLower($this->circulaires);
-        $this->cycling       = $toLower($this->cycling);
+            $this->b2w_send_w2b = DB::select("
+                SELECT
+                    b.transaction_initiated_time::date         AS date,
+                    b.credit_party_identifier                  AS source_bank,
+                    b.credit_party_identifier                  AS client_a,
+                    b.actual_amount                            AS b2w_amount,
+                    b.transaction_initiated_time               AS b2w_time,
+                    s.credit_party_identifier                  AS client_b,
+                    s.actual_amount                            AS send_amount,
+                    s.transaction_initiated_time               AS send_time,
+                    w.actual_amount                            AS w2b_amount,
+                    w.transaction_initiated_time               AS w2b_time,
+                    w.credit_party_identifier                  AS destination_bank,
+                    EXTRACT(EPOCH FROM (s.transaction_initiated_time - b.transaction_initiated_time)) / 60 AS delay_b2w_send_min,
+                    EXTRACT(EPOCH FROM (w.transaction_initiated_time - s.transaction_initiated_time)) / 60 AS delay_send_w2b_min
+                FROM fact_txn_v2 b
+                JOIN fact_txn_v2 s
+                    ON  s.credit_party_identifier    = b.credit_party_identifier
+                    AND s.transaction_initiated_time > b.transaction_initiated_time
+                    AND s.transaction_initiated_time < b.transaction_initiated_time + {$timeWindow1}
+                    AND s.reason_index {$idxSend}
+                JOIN fact_txn_v2 w
+                    ON  w.credit_party_identifier    = s.credit_party_identifier
+                    AND w.transaction_initiated_time > s.transaction_initiated_time
+                    AND w.transaction_initiated_time < s.transaction_initiated_time + {$timeWindow2}
+                    AND w.reason_index {$idxW2b}
+                WHERE b.transaction_initiated_time BETWEEN ? AND ?
+                  AND b.reason_index {$idxB2w}
+                ORDER BY b.transaction_initiated_time
+                LIMIT 1000
+            ", [$debut, $fin]);
 
-        $this->analyse = true;
+            // ── 6. Scénarios circulaires — SQL ────────────────────────────
+            $timeWindowCirc = $isSingleDay ? "INTERVAL '2 hours'" : "INTERVAL '12 hours'";
+
+            $this->circulaires = DB::select("
+                SELECT
+                    mp.transaction_initiated_time::date        AS date,
+                    ci.debit_party_identifier                  AS cashin_from,
+                    ci.transaction_initiated_time              AS ci_time,
+                    mp.debit_party_identifier                  AS client,
+                    mp.credit_party_identifier                 AS merchant,
+                    mp.transaction_initiated_time              AS mp_time,
+                    bco.transaction_initiated_time             AS bco_time,
+                    mp.actual_amount                           AS amount,
+                    bco.credit_party_identifier                AS cashout_to,
+                    EXTRACT(EPOCH FROM (bco.transaction_initiated_time - mp.transaction_initiated_time)) / 60 AS delay_minutes,
+                    CASE
+                        WHEN EXTRACT(EPOCH FROM (bco.transaction_initiated_time - mp.transaction_initiated_time)) / 60 < 10
+                            THEN 'Cashout rapide'
+                        WHEN mp.actual_amount >= 20000
+                            THEN 'Montant élevé'
+                        ELSE 'Activité inhabituelle'
+                    END AS flags
+                FROM fact_txn_v2 mp
+                JOIN fact_txn_v2 ci
+                    ON  ci.credit_party_identifier   = mp.debit_party_identifier
+                    AND ci.transaction_initiated_time < mp.transaction_initiated_time
+                    AND ci.transaction_initiated_time > mp.transaction_initiated_time - {$timeWindowCirc}
+                    AND ci.reason_index {$idxCashin}
+                JOIN fact_txn_v2 bco
+                    ON  bco.debit_party_identifier   = mp.credit_party_identifier
+                    AND bco.actual_amount            = mp.actual_amount
+                    AND bco.transaction_initiated_time > mp.transaction_initiated_time
+                    AND bco.transaction_initiated_time < mp.transaction_initiated_time + {$timeWindowCirc}
+                    AND bco.reason_index {$idxCashout}
+                WHERE mp.transaction_initiated_time BETWEEN ? AND ?
+                  AND mp.reason_index {$idxMerchant}
+                ORDER BY delay_minutes ASC
+                LIMIT 500
+            ", [$debut, $fin]);
+
+            // ── 7. Cycling — SQL agrégé ───────────────────────────────────
+            // Pour le cycling, on utilise une fenêtre temporelle plus large
+            $timeWindowCycle = $isSingleDay ? "INTERVAL '3 hours'" : "INTERVAL '24 hours'";
+
+            $this->cycling = DB::select("
+                SELECT
+                    ci.transaction_initiated_time::date        AS date,
+                    ci.debit_party_identifier                  AS agent,
+                    COUNT(*)                                    AS nb_cycles,
+                    ci.actual_amount                           AS montant_par_cycle,
+                    SUM(ci.actual_amount)                       AS total_cashin_fdj,
+                    SUM(w.actual_amount)                        AS total_w2b_fdj,
+                    SUM(ci.actual_amount) * 0.0256              AS commission_gagnee,
+                    (SUM(ci.actual_amount) * 0.0256) - (ci.actual_amount * 0.0256) AS surplus_commission,
+                    AVG(EXTRACT(EPOCH FROM (w.transaction_initiated_time - ci.transaction_initiated_time)) / 60) AS avg_delay_min
+                FROM fact_txn_v2 ci
+                JOIN fact_txn_v2 s
+                    ON  s.debit_party_identifier     = ci.credit_party_identifier
+                    AND s.transaction_initiated_time > ci.transaction_initiated_time
+                    AND s.transaction_initiated_time < ci.transaction_initiated_time + {$timeWindowCycle}
+                    AND s.reason_index {$idxSend}
+                    AND ABS(s.actual_amount - ci.actual_amount) / ci.actual_amount <= ?
+                JOIN fact_txn_v2 w
+                    ON  w.debit_party_identifier     = s.credit_party_identifier
+                    AND w.transaction_initiated_time > s.transaction_initiated_time
+                    AND w.transaction_initiated_time < s.transaction_initiated_time + {$timeWindowCycle}
+                    AND w.reason_index {$idxW2b}
+                WHERE ci.transaction_initiated_time BETWEEN ? AND ?
+                  AND ci.reason_index {$idxCashin}
+                  AND ci.actual_amount > 0
+                GROUP BY ci.transaction_initiated_time::date, ci.debit_party_identifier, ci.actual_amount
+                HAVING COUNT(*) >= ?
+                ORDER BY nb_cycles DESC, commission_gagnee DESC
+                LIMIT 200
+            ", [
+                $this->amount_tolerance / 100,
+                $debut,
+                $fin,
+                $this->min_cycles,
+            ]);
+
+            // Conversion en minuscules pour les clés
+            $toLower = fn($rows) => array_map(
+                fn($r) => array_change_key_case((array)$r, CASE_LOWER),
+                $rows
+            );
+
+            $this->repeat_mp     = $toLower($this->repeat_mp);
+            $this->repeat_cashin = $toLower($this->repeat_cashin);
+            $this->repeat_w2b    = $toLower($this->repeat_w2b);
+            $this->cashin_w2b    = $toLower($this->cashin_w2b);
+            $this->b2w_send_w2b  = $toLower($this->b2w_send_w2b);
+            $this->circulaires   = $toLower($this->circulaires);
+            $this->cycling       = $toLower($this->cycling);
+
+            $this->analyse = true;
+            $this->error_message = '';
+
+        } catch (\Exception $e) {
+            $this->analyse = false;
+            $this->loading = false;
+            $this->error_message = 'Erreur SQL: ' . $e->getMessage();
+            \Log::error('Erreur analyse: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+            session()->flash('error', 'Une erreur est survenue lors de l\'analyse: ' . $e->getMessage());
+        }
     }
 
     public function with(): array
@@ -281,15 +355,31 @@ new class extends Component {
             Paramètres d'analyse
         </p>
 
+        @if(session()->has('error'))
+            <div style="background:#FDECEA; border-left:3px solid #E24B4A; padding:12px 16px; border-radius:6px; margin-bottom:16px;">
+                <p style="font-size:12px; color:#7F1D1D; margin:0;">{{ session('error') }}</p>
+            </div>
+        @endif
+
+        @if(session()->has('warning'))
+            <div style="background:#FFF3D0; border-left:3px solid #F5A800; padding:12px 16px; border-radius:6px; margin-bottom:16px;">
+                <p style="font-size:12px; color:#7A4F00; margin:0;">{{ session('warning') }}</p>
+            </div>
+        @endif
+
         <div style="display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; margin-bottom:16px;">
             <div>
                 <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date début</label>
                 <input type="date" wire:model="date_debut"
+                       min="{{ Carbon::now()->subDays(30)->format('Y-m-d') }}"
+                       max="{{ Carbon::now()->format('Y-m-d') }}"
                        style="width:100%; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
             </div>
             <div>
                 <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date fin</label>
                 <input type="date" wire:model="date_fin"
+                       min="{{ Carbon::now()->subDays(30)->format('Y-m-d') }}"
+                       max="{{ Carbon::now()->format('Y-m-d') }}"
                        style="width:100%; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
             </div>
             <div>
@@ -309,13 +399,19 @@ new class extends Component {
             </div>
         </div>
 
-        <button onclick="lancerAnalyse()"
-                style="background:#1B2F6E; color:#fff; font-size:13px; font-weight:600; padding:10px 24px; border-radius:8px; border:none; cursor:pointer; display:flex; align-items:center; gap:8px;">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="white">
-                <path d="M8 2L1 14h14L8 2zm0 5v4"/><circle cx="8" cy="12" r="0.8"/>
-            </svg>
-            Lancer l'analyse
-        </button>
+        <div style="display:flex; gap:12px; align-items:center;">
+            <button onclick="lancerAnalyse()"
+                    style="background:#1B2F6E; color:#fff; font-size:13px; font-weight:600; padding:10px 24px; border-radius:8px; border:none; cursor:pointer; display:flex; align-items:center; gap:8px;">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="white">
+                    <path d="M8 2L1 14h14L8 2zm0 5v4"/><circle cx="8" cy="12" r="0.8"/>
+                </svg>
+                Lancer l'analyse
+            </button>
+
+            @if(session()->has('error'))
+                <span style="font-size:12px; color:#E24B4A;">{{ session('error') }}</span>
+            @endif
+        </div>
     </div>
 
     @if($analyse)
@@ -692,12 +788,37 @@ new class extends Component {
 
     <script>
         function lancerAnalyse() {
-
             if (typeof Swal === 'undefined') {
                 alert('SweetAlert2 non chargé — vérifie le layout.');
                 return;
             }
 
+            // Récupérer les dates
+            const dateDebut = document.querySelector('[wire\\:model="date_debut"]')?.value || '';
+            const dateFin = document.querySelector('[wire\\:model="date_fin"]')?.value || '';
+            
+            // Vérifier si la période est d'un seul jour
+            if (dateDebut && dateFin && dateDebut === dateFin) {
+                Swal.fire({
+                    title: '⚠️ Période courte',
+                    text: 'L\'analyse sur une seule journée peut donner des résultats limités. Les scénarios de fraude sont souvent détectés sur plusieurs jours.',
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonColor: '#1B2F6E',
+                    cancelButtonColor: '#E24B4A',
+                    confirmButtonText: 'Continuer quand même',
+                    cancelButtonText: 'Annuler',
+                }).then((result) => {
+                    if (result.isConfirmed) {
+                        lancerAnalyseReelle();
+                    }
+                });
+            } else {
+                lancerAnalyseReelle();
+            }
+        }
+
+        function lancerAnalyseReelle() {
             Swal.fire({
                 title: 'Analyse en cours...',
                 html: `
@@ -770,8 +891,8 @@ new class extends Component {
                             console.error(err);
                             Swal.fire({
                                 title: 'Erreur',
-                                text:  'Une erreur est survenue lors de l\'analyse.',
-                                icon:  'error',
+                                text: 'Une erreur est survenue lors de l\'analyse. Vérifie les logs pour plus de détails.',
+                                icon: 'error',
                                 confirmButtonColor: '#E24B4A',
                             });
                         });

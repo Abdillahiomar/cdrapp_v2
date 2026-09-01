@@ -132,7 +132,7 @@
             </a>
         @endcan
 
-        
+        @can('relever.bancaire')
             <a href="{{ route('finance.bank-balances') }}" wire:navigate
                style="{{ request()->routeIs('finance.bank-balances.*') ? $linkActive : $linkInactive }}">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
@@ -145,6 +145,8 @@
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
             </a>
+        
+       
             <a href="{{ route('balances') }}" wire:navigate
                style="{{ request()->routeIs('balances') ? $linkActive : $linkInactive }}">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
@@ -157,10 +159,10 @@
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
             </a>
-        
+        @encan
 
         {{-- ── OPÉRATIONS ── --}}
-       
+       @can('operations.import-msisdn')
             <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Opérations</p>
             <a href="{{ route('operations.index') }}" wire:navigate
                style="{{ request()->routeIs('operations.*') ? $linkActive : $linkInactive }}">
@@ -173,6 +175,7 @@
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
             </a>
+        @endcan
         
 
         {{-- ── ANALYSE ── --}}
@@ -209,33 +212,34 @@
            
         @endcanany
 
-
-            <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">AML & Détection de Fraude</p>
+        @can('fraudes.view')
+           <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">
+            AML & Détection de Fraude</p>
            
-                <a href="{{ route('aml.index') }}" wire:navigate
-                   style="{{ request()->routeIs('aml.index') ? $linkActive : $linkInactive }}">
+            <a href="{{ route('aml.index') }}" wire:navigate
+                style="{{ request()->routeIs('aml.index') ? $linkActive : $linkInactive }}">
                     <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
                         <path d="M8 2L1 14h14L8 2zm0 5v4"/><circle cx="8" cy="12" r="0.8"/>
                     </svg>
                     AML
-                    <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#ef4444; flex-shrink:0;"></span>
-                </a>
-          
+                <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#ef4444; flex-shrink:0;"></span>
+            </a>   
 
-           
-                <a href="{{ route('fraudes.index') }}" wire:navigate
+            <a href="{{ route('fraudes.index') }}" wire:navigate
                    style="{{ request()->routeIs('fraudes.*') ? $linkActive : $linkInactive }}">
                     <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
                         <path d="M8 2L1 14h14L8 2zm0 5v4"/><circle cx="8" cy="12" r="0.8"/>
                     </svg>
                     Détection fraude
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#ef4444; flex-shrink:0;"></span>
-                </a>
+            </a>    
+        @endcan
             
 
         {{-- ── ANCIEN CDRAPP ── --}}
         <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Ancien CDRAPP</p>
 
+       @can('transactions.analyze')
         <a href="{{ route('ancien_cdrapp') }}" wire:navigate
            style="{{ request()->routeIs('ancien_cdrapp') ? $linkActive : $linkInactive }}">
             <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
@@ -246,6 +250,7 @@
                 <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
             @endif
         </a>
+        @endcan
 
         {{-- ── ADMINISTRATION ── --}}
         @canany(['admin.users.view', 'admin.roles.view', 'admin.departments.view'])
@@ -266,7 +271,7 @@
                 </a>
             @endcan
 
-            @can('admin.roles.view')
+            @can(['admin.users.view', 'admin.roles.view', 'admin.departments.view'])
                 <a href="{{ route('admin.roles.index') }}" wire:navigate
                    style="{{ request()->routeIs('admin.roles.*') ? $linkActive : $linkInactive }}">
                     <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
@@ -281,6 +286,4 @@
         @endcanany
 
     </nav>
-
-    
 </aside>
