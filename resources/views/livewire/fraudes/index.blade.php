@@ -49,7 +49,7 @@ new class extends Component {
      */
     private function reasonIndexesFor(string $needle): array
     {
-        return \App\Models\reasonType::query()
+        return \App\Models\ReasonType::query()
             ->whereRaw('LOWER(reason_name) LIKE ?', ['%' . strtolower($needle) . '%'])
             ->pluck('reason_index')
             ->map(fn($v) => (int) $v)
