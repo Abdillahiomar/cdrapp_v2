@@ -271,7 +271,7 @@
                 </a>
             @endcan
 
-            @can(['admin.users.view', 'admin.roles.view', 'admin.departments.view'])
+            @can('admin.roles.view')
                 <a href="{{ route('admin.roles.index') }}" wire:navigate
                    style="{{ request()->routeIs('admin.roles.*') ? $linkActive : $linkInactive }}">
                     <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
