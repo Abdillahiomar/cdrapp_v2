@@ -4,6 +4,7 @@ use Livewire\Volt\Component;
 use App\Models\Transaction;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
 
 new class extends Component {
 
@@ -90,254 +91,333 @@ new class extends Component {
     }
 
     public function lancer()
-    {
-        try {
-            set_time_limit(300);
-            ini_set('memory_limit', '512M');
+{
+    // Générer une clé de cache unique basée sur les paramètres
+    $cacheKey = 'fraude_analysis_' . md5(
+        $this->date_debut . 
+        $this->date_fin . 
+        $this->min_cycles . 
+        $this->amount_tolerance . 
+        $this->max_depth
+    );
+    // Vérifier si les résultats sont en cache
+    if (Cache::has($cacheKey)) {
+        $cached = Cache::get($cacheKey);
+        $this->repeat_mp = $cached['repeat_mp'];
+        $this->repeat_cashin = $cached['repeat_cashin'];
+        $this->repeat_w2b = $cached['repeat_w2b'];
+        $this->cashin_w2b = $cached['cashin_w2b'];
+        $this->b2w_send_w2b = $cached['b2w_send_w2b'];
+        $this->circulaires = $cached['circulaires'];
+        $this->cycling = $cached['cycling'];
+        $this->analyse = true;
+        session()->flash('info', 'Résultats chargés depuis le cache.');
+        return;
+    }
+    try {
+        set_time_limit(300);
+        ini_set('memory_limit', '512M');
 
-            // Validation
-            if (!$this->validatePeriod()) {
-                $this->analyse = false;
-                session()->flash('error', $this->error_message);
-                return;
-            }
+        if (!$this->validatePeriod()) {
+            $this->analyse = false;
+            session()->flash('error', $this->error_message);
+            return;
+        }
 
-            $debut = $this->date_debut . ' 00:00:00';
-            $fin   = $this->date_fin   . ' 23:59:59';
+        $debut = $this->date_debut . ' 00:00:00';
+        $fin   = $this->date_fin   . ' 23:59:59';
+        $isSingleDay = $this->date_debut === $this->date_fin;
 
-            // Vérifier si c'est une période d'un seul jour
-            $isSingleDay = $this->date_debut === $this->date_fin;
-            
-            if ($isSingleDay) {
-                session()->flash('warning', '⚠️ L\'analyse sur une seule journée peut donner des résultats limités. Les scénarios de fraude sont souvent détectés sur plusieurs jours.');
-            }
+        // Résolution des indexes
+        $this->idxMerchant = $this->reasonIndexesFor('merchant payment');
+        $this->idxCashin   = $this->reasonIndexesFor('customer cash in');
+        $this->idxW2b      = $this->reasonIndexesFor('w2b');
+        $this->idxSend     = $this->reasonIndexesFor('send money');
+        $this->idxB2w      = $this->reasonIndexesFor('b2w');
+        $this->idxCashout  = $this->reasonIndexesFor('cash out');
 
-            // ── Résolution des reason_index par motif (une seule fois) ────
-            $this->idxMerchant = $this->reasonIndexesFor('merchant payment');
-            $this->idxCashin   = $this->reasonIndexesFor('customer cash in');
-            $this->idxW2b      = $this->reasonIndexesFor('w2b');
-            $this->idxSend     = $this->reasonIndexesFor('send money');
-            $this->idxB2w      = $this->reasonIndexesFor('b2w');
-            $this->idxCashout  = $this->reasonIndexesFor('cash out');
+        $idxMerchant = $this->inClause($this->idxMerchant);
+        $idxCashin   = $this->inClause($this->idxCashin);
+        $idxW2b      = $this->inClause($this->idxW2b);
+        $idxSend     = $this->inClause($this->idxSend);
+        $idxB2w      = $this->inClause($this->idxB2w);
+        $idxCashout  = $this->inClause($this->idxCashout);
 
-            $idxMerchant = $this->inClause($this->idxMerchant);
-            $idxCashin   = $this->inClause($this->idxCashin);
-            $idxW2b      = $this->inClause($this->idxW2b);
-            $idxSend     = $this->inClause($this->idxSend);
-            $idxB2w      = $this->inClause($this->idxB2w);
-            $idxCashout  = $this->inClause($this->idxCashout);
-
-            // ── 1. MP répétitifs ─────────────────────────────────────────
-            $this->repeat_mp = DB::select("
-                SELECT
-                    debit_party_identifier,
-                    credit_party_identifier,
-                    COUNT(*) as nb_paiements
+        // ── OPTIMISATION 1 : Utiliser des CTE pour réduire les scans ──
+        
+        // 1. MP répétitifs - optimisé
+        $this->repeat_mp = DB::select("
+            WITH filtered_transactions AS (
+                SELECT debit_party_identifier, credit_party_identifier
                 FROM fact_txn_v2
                 WHERE transaction_initiated_time BETWEEN ? AND ?
                   AND reason_index {$idxMerchant}
-                GROUP BY debit_party_identifier, credit_party_identifier
-                HAVING COUNT(*) > 2
-                ORDER BY nb_paiements DESC
-            ", [$debut, $fin]);
+            )
+            SELECT 
+                debit_party_identifier,
+                credit_party_identifier,
+                COUNT(*) as nb_paiements
+            FROM filtered_transactions
+            GROUP BY debit_party_identifier, credit_party_identifier
+            HAVING COUNT(*) > 2
+            ORDER BY nb_paiements DESC
+            LIMIT 100
+        ", [$debut, $fin]);
 
-            // ── 2. Cash In répétitifs ────────────────────────────────────
-            $this->repeat_cashin = DB::select("
-                SELECT
-                    debit_party_identifier,
-                    credit_party_identifier,
-                    COUNT(*) as nb_cashin
+        // 2. Cash In répétitifs - optimisé
+        $this->repeat_cashin = DB::select("
+            WITH filtered_transactions AS (
+                SELECT debit_party_identifier, credit_party_identifier
                 FROM fact_txn_v2
                 WHERE transaction_initiated_time BETWEEN ? AND ?
                   AND reason_index {$idxCashin}
-                GROUP BY debit_party_identifier, credit_party_identifier
-                HAVING COUNT(*) >= 2
-                ORDER BY nb_cashin DESC
-            ", [$debut, $fin]);
+            )
+            SELECT 
+                debit_party_identifier,
+                credit_party_identifier,
+                COUNT(*) as nb_cashin
+            FROM filtered_transactions
+            GROUP BY debit_party_identifier, credit_party_identifier
+            HAVING COUNT(*) >= 2
+            ORDER BY nb_cashin DESC
+            LIMIT 100
+        ", [$debut, $fin]);
 
-            // ── 3. W2B répétitifs ────────────────────────────────────────
-            $this->repeat_w2b = DB::select("
-                SELECT
-                    debit_party_identifier,
-                    credit_party_identifier,
-                    COUNT(*) as nb_w2b
+        // 3. W2B répétitifs - optimisé
+        $this->repeat_w2b = DB::select("
+            WITH filtered_transactions AS (
+                SELECT debit_party_identifier, credit_party_identifier
                 FROM fact_txn_v2
                 WHERE transaction_initiated_time BETWEEN ? AND ?
                   AND reason_index {$idxW2b}
-                GROUP BY debit_party_identifier, credit_party_identifier
-                HAVING COUNT(*) >= 2
-                ORDER BY nb_w2b DESC
-            ", [$debut, $fin]);
+            )
+            SELECT 
+                debit_party_identifier,
+                credit_party_identifier,
+                COUNT(*) as nb_w2b
+            FROM filtered_transactions
+            GROUP BY debit_party_identifier, credit_party_identifier
+            HAVING COUNT(*) >= 2
+            ORDER BY nb_w2b DESC
+            LIMIT 100
+        ", [$debut, $fin]);
 
-            // ── 4. Cash In → W2B — jointure SQL ──────────────────────────
-            // Adapter la requête selon la période
-            $timeWindow = $isSingleDay ? "INTERVAL '2 hours'" : "INTERVAL '24 hours'";
-            
-            $this->cashin_w2b = DB::select("
-                SELECT
-                    ci.transaction_initiated_time::date        AS date,
-                    ci.debit_party_identifier                  AS distributeur,
-                    ci.credit_party_identifier                 AS client,
-                    ci.actual_amount                           AS cashin_amount,
-                    ci.transaction_initiated_time              AS cashin_time,
-                    w.actual_amount                            AS w2b_amount,
-                    w.transaction_initiated_time               AS w2b_time,
-                    w.credit_party_identifier                  AS banque,
-                    EXTRACT(EPOCH FROM (w.transaction_initiated_time - ci.transaction_initiated_time)) / 60 AS delay_minutes
-                FROM fact_txn_v2 ci
-                JOIN fact_txn_v2 w
-                    ON  w.credit_party_identifier    = ci.credit_party_identifier
-                    AND w.transaction_initiated_time > ci.transaction_initiated_time
-                    AND w.transaction_initiated_time < ci.transaction_initiated_time + {$timeWindow}
-                    AND w.reason_index {$idxW2b}
-                WHERE ci.transaction_initiated_time BETWEEN ? AND ?
-                  AND ci.reason_index {$idxCashin}
-                ORDER BY ci.transaction_initiated_time
-                LIMIT 1000
-            ", [$debut, $fin]);
-
-            // ── 5. B2W → Send → W2B — double jointure SQL ────────────────
-            $timeWindow1 = $isSingleDay ? "INTERVAL '1 hour'" : "INTERVAL '6 hours'";
-            $timeWindow2 = $isSingleDay ? "INTERVAL '1 hour'" : "INTERVAL '6 hours'";
-
-            $this->b2w_send_w2b = DB::select("
-                SELECT
-                    b.transaction_initiated_time::date         AS date,
-                    b.credit_party_identifier                  AS source_bank,
-                    b.credit_party_identifier                  AS client_a,
-                    b.actual_amount                            AS b2w_amount,
-                    b.transaction_initiated_time               AS b2w_time,
-                    s.credit_party_identifier                  AS client_b,
-                    s.actual_amount                            AS send_amount,
-                    s.transaction_initiated_time               AS send_time,
-                    w.actual_amount                            AS w2b_amount,
-                    w.transaction_initiated_time               AS w2b_time,
-                    w.credit_party_identifier                  AS destination_bank,
-                    EXTRACT(EPOCH FROM (s.transaction_initiated_time - b.transaction_initiated_time)) / 60 AS delay_b2w_send_min,
-                    EXTRACT(EPOCH FROM (w.transaction_initiated_time - s.transaction_initiated_time)) / 60 AS delay_send_w2b_min
-                FROM fact_txn_v2 b
-                JOIN fact_txn_v2 s
-                    ON  s.credit_party_identifier    = b.credit_party_identifier
-                    AND s.transaction_initiated_time > b.transaction_initiated_time
-                    AND s.transaction_initiated_time < b.transaction_initiated_time + {$timeWindow1}
-                    AND s.reason_index {$idxSend}
-                JOIN fact_txn_v2 w
-                    ON  w.credit_party_identifier    = s.credit_party_identifier
-                    AND w.transaction_initiated_time > s.transaction_initiated_time
-                    AND w.transaction_initiated_time < s.transaction_initiated_time + {$timeWindow2}
-                    AND w.reason_index {$idxW2b}
-                WHERE b.transaction_initiated_time BETWEEN ? AND ?
-                  AND b.reason_index {$idxB2w}
-                ORDER BY b.transaction_initiated_time
-                LIMIT 1000
-            ", [$debut, $fin]);
-
-            // ── 6. Scénarios circulaires — SQL ────────────────────────────
-            $timeWindowCirc = $isSingleDay ? "INTERVAL '2 hours'" : "INTERVAL '12 hours'";
-
-            $this->circulaires = DB::select("
-                SELECT
-                    mp.transaction_initiated_time::date        AS date,
-                    ci.debit_party_identifier                  AS cashin_from,
-                    ci.transaction_initiated_time              AS ci_time,
-                    mp.debit_party_identifier                  AS client,
-                    mp.credit_party_identifier                 AS merchant,
-                    mp.transaction_initiated_time              AS mp_time,
-                    bco.transaction_initiated_time             AS bco_time,
-                    mp.actual_amount                           AS amount,
-                    bco.credit_party_identifier                AS cashout_to,
-                    EXTRACT(EPOCH FROM (bco.transaction_initiated_time - mp.transaction_initiated_time)) / 60 AS delay_minutes,
-                    CASE
-                        WHEN EXTRACT(EPOCH FROM (bco.transaction_initiated_time - mp.transaction_initiated_time)) / 60 < 10
-                            THEN 'Cashout rapide'
-                        WHEN mp.actual_amount >= 20000
-                            THEN 'Montant élevé'
-                        ELSE 'Activité inhabituelle'
-                    END AS flags
-                FROM fact_txn_v2 mp
-                JOIN fact_txn_v2 ci
-                    ON  ci.credit_party_identifier   = mp.debit_party_identifier
-                    AND ci.transaction_initiated_time < mp.transaction_initiated_time
-                    AND ci.transaction_initiated_time > mp.transaction_initiated_time - {$timeWindowCirc}
-                    AND ci.reason_index {$idxCashin}
-                JOIN fact_txn_v2 bco
-                    ON  bco.debit_party_identifier   = mp.credit_party_identifier
-                    AND bco.actual_amount            = mp.actual_amount
-                    AND bco.transaction_initiated_time > mp.transaction_initiated_time
-                    AND bco.transaction_initiated_time < mp.transaction_initiated_time + {$timeWindowCirc}
-                    AND bco.reason_index {$idxCashout}
-                WHERE mp.transaction_initiated_time BETWEEN ? AND ?
-                  AND mp.reason_index {$idxMerchant}
-                ORDER BY delay_minutes ASC
+        // 4. Cash In → W2B - optimisé avec LIMIT et fenêtre temporelle réduite
+        $timeWindow = $isSingleDay ? "INTERVAL '1 hour'" : "INTERVAL '6 hours'";
+        
+        $this->cashin_w2b = DB::select("
+            WITH cashin_transactions AS (
+                SELECT 
+                    transaction_initiated_time,
+                    debit_party_identifier,
+                    credit_party_identifier,
+                    actual_amount
+                FROM fact_txn_v2
+                WHERE transaction_initiated_time BETWEEN ? AND ?
+                  AND reason_index {$idxCashin}
                 LIMIT 500
-            ", [$debut, $fin]);
+            )
+            SELECT
+                ci.transaction_initiated_time::date AS date,
+                ci.debit_party_identifier AS distributeur,
+                ci.credit_party_identifier AS client,
+                ci.actual_amount AS cashin_amount,
+                ci.transaction_initiated_time AS cashin_time,
+                w.actual_amount AS w2b_amount,
+                w.transaction_initiated_time AS w2b_time,
+                w.credit_party_identifier AS banque,
+                EXTRACT(EPOCH FROM (w.transaction_initiated_time - ci.transaction_initiated_time)) / 60 AS delay_minutes
+            FROM cashin_transactions ci
+            JOIN fact_txn_v2 w
+                ON w.credit_party_identifier = ci.credit_party_identifier
+                AND w.transaction_initiated_time > ci.transaction_initiated_time
+                AND w.transaction_initiated_time < ci.transaction_initiated_time + {$timeWindow}
+                AND w.reason_index {$idxW2b}
+            ORDER BY ci.transaction_initiated_time
+            LIMIT 200
+        ", [$debut, $fin]);
 
-            // ── 7. Cycling — SQL agrégé ───────────────────────────────────
-            // Pour le cycling, on utilise une fenêtre temporelle plus large
-            $timeWindowCycle = $isSingleDay ? "INTERVAL '3 hours'" : "INTERVAL '24 hours'";
+        // 5. B2W → Send → W2B - optimisé
+        $timeWindow1 = $isSingleDay ? "INTERVAL '30 minutes'" : "INTERVAL '2 hours'";
+        $timeWindow2 = $isSingleDay ? "INTERVAL '30 minutes'" : "INTERVAL '2 hours'";
 
-            $this->cycling = DB::select("
-                SELECT
-                    ci.transaction_initiated_time::date        AS date,
-                    ci.debit_party_identifier                  AS agent,
-                    COUNT(*)                                    AS nb_cycles,
-                    ci.actual_amount                           AS montant_par_cycle,
-                    SUM(ci.actual_amount)                       AS total_cashin_fdj,
-                    SUM(w.actual_amount)                        AS total_w2b_fdj,
-                    SUM(ci.actual_amount) * 0.0256              AS commission_gagnee,
-                    (SUM(ci.actual_amount) * 0.0256) - (ci.actual_amount * 0.0256) AS surplus_commission,
-                    AVG(EXTRACT(EPOCH FROM (w.transaction_initiated_time - ci.transaction_initiated_time)) / 60) AS avg_delay_min
-                FROM fact_txn_v2 ci
-                JOIN fact_txn_v2 s
-                    ON  s.debit_party_identifier     = ci.credit_party_identifier
-                    AND s.transaction_initiated_time > ci.transaction_initiated_time
-                    AND s.transaction_initiated_time < ci.transaction_initiated_time + {$timeWindowCycle}
-                    AND s.reason_index {$idxSend}
-                    AND ABS(s.actual_amount - ci.actual_amount) / ci.actual_amount <= ?
-                JOIN fact_txn_v2 w
-                    ON  w.debit_party_identifier     = s.credit_party_identifier
-                    AND w.transaction_initiated_time > s.transaction_initiated_time
-                    AND w.transaction_initiated_time < s.transaction_initiated_time + {$timeWindowCycle}
-                    AND w.reason_index {$idxW2b}
-                WHERE ci.transaction_initiated_time BETWEEN ? AND ?
-                  AND ci.reason_index {$idxCashin}
-                  AND ci.actual_amount > 0
-                GROUP BY ci.transaction_initiated_time::date, ci.debit_party_identifier, ci.actual_amount
-                HAVING COUNT(*) >= ?
-                ORDER BY nb_cycles DESC, commission_gagnee DESC
-                LIMIT 200
-            ", [
-                $this->amount_tolerance / 100,
-                $debut,
-                $fin,
-                $this->min_cycles,
-            ]);
+        $this->b2w_send_w2b = DB::select("
+            WITH b2w_transactions AS (
+                SELECT 
+                    transaction_initiated_time,
+                    credit_party_identifier,
+                    actual_amount
+                FROM fact_txn_v2
+                WHERE transaction_initiated_time BETWEEN ? AND ?
+                  AND reason_index {$idxB2w}
+                LIMIT 300
+            )
+            SELECT
+                b.transaction_initiated_time::date AS date,
+                b.credit_party_identifier AS source_bank,
+                b.credit_party_identifier AS client_a,
+                b.actual_amount AS b2w_amount,
+                b.transaction_initiated_time AS b2w_time,
+                s.credit_party_identifier AS client_b,
+                s.actual_amount AS send_amount,
+                s.transaction_initiated_time AS send_time,
+                w.actual_amount AS w2b_amount,
+                w.transaction_initiated_time AS w2b_time,
+                w.credit_party_identifier AS destination_bank,
+                EXTRACT(EPOCH FROM (s.transaction_initiated_time - b.transaction_initiated_time)) / 60 AS delay_b2w_send_min,
+                EXTRACT(EPOCH FROM (w.transaction_initiated_time - s.transaction_initiated_time)) / 60 AS delay_send_w2b_min
+            FROM b2w_transactions b
+            JOIN fact_txn_v2 s
+                ON s.credit_party_identifier = b.credit_party_identifier
+                AND s.transaction_initiated_time > b.transaction_initiated_time
+                AND s.transaction_initiated_time < b.transaction_initiated_time + {$timeWindow1}
+                AND s.reason_index {$idxSend}
+            JOIN fact_txn_v2 w
+                ON w.credit_party_identifier = s.credit_party_identifier
+                AND w.transaction_initiated_time > s.transaction_initiated_time
+                AND w.transaction_initiated_time < s.transaction_initiated_time + {$timeWindow2}
+                AND w.reason_index {$idxW2b}
+            ORDER BY b.transaction_initiated_time
+            LIMIT 200
+        ", [$debut, $fin]);
 
-            // Conversion en minuscules pour les clés
-            $toLower = fn($rows) => array_map(
-                fn($r) => array_change_key_case((array)$r, CASE_LOWER),
-                $rows
-            );
+        // 6. Scénarios circulaires - optimisé
+        $timeWindowCirc = $isSingleDay ? "INTERVAL '1 hour'" : "INTERVAL '6 hours'";
 
-            $this->repeat_mp     = $toLower($this->repeat_mp);
-            $this->repeat_cashin = $toLower($this->repeat_cashin);
-            $this->repeat_w2b    = $toLower($this->repeat_w2b);
-            $this->cashin_w2b    = $toLower($this->cashin_w2b);
-            $this->b2w_send_w2b  = $toLower($this->b2w_send_w2b);
-            $this->circulaires   = $toLower($this->circulaires);
-            $this->cycling       = $toLower($this->cycling);
+        $this->circulaires = DB::select("
+            WITH mp_transactions AS (
+                SELECT 
+                    transaction_initiated_time,
+                    debit_party_identifier,
+                    credit_party_identifier,
+                    actual_amount
+                FROM fact_txn_v2
+                WHERE transaction_initiated_time BETWEEN ? AND ?
+                  AND reason_index {$idxMerchant}
+                LIMIT 300
+            )
+            SELECT
+                mp.transaction_initiated_time::date AS date,
+                ci.debit_party_identifier AS cashin_from,
+                ci.transaction_initiated_time AS ci_time,
+                mp.debit_party_identifier AS client,
+                mp.credit_party_identifier AS merchant,
+                mp.transaction_initiated_time AS mp_time,
+                bco.transaction_initiated_time AS bco_time,
+                mp.actual_amount AS amount,
+                bco.credit_party_identifier AS cashout_to,
+                EXTRACT(EPOCH FROM (bco.transaction_initiated_time - mp.transaction_initiated_time)) / 60 AS delay_minutes,
+                CASE
+                    WHEN EXTRACT(EPOCH FROM (bco.transaction_initiated_time - mp.transaction_initiated_time)) / 60 < 10
+                        THEN 'Cashout rapide'
+                    WHEN mp.actual_amount >= 20000
+                        THEN 'Montant élevé'
+                    ELSE 'Activité inhabituelle'
+                END AS flags
+            FROM mp_transactions mp
+            JOIN fact_txn_v2 ci
+                ON ci.credit_party_identifier = mp.debit_party_identifier
+                AND ci.transaction_initiated_time < mp.transaction_initiated_time
+                AND ci.transaction_initiated_time > mp.transaction_initiated_time - {$timeWindowCirc}
+                AND ci.reason_index {$idxCashin}
+            JOIN fact_txn_v2 bco
+                ON bco.debit_party_identifier = mp.credit_party_identifier
+                AND bco.actual_amount = mp.actual_amount
+                AND bco.transaction_initiated_time > mp.transaction_initiated_time
+                AND bco.transaction_initiated_time < mp.transaction_initiated_time + {$timeWindowCirc}
+                AND bco.reason_index {$idxCashout}
+            ORDER BY delay_minutes ASC
+            LIMIT 200
+        ", [$debut, $fin]);
 
-            $this->analyse = true;
-            $this->error_message = '';
+        // 7. Cycling - optimisé
+        $timeWindowCycle = $isSingleDay ? "INTERVAL '2 hours'" : "INTERVAL '12 hours'";
 
-        } catch (\Exception $e) {
-            $this->analyse = false;
-            $this->loading = false;
-            $this->error_message = 'Erreur SQL: ' . $e->getMessage();
-            \Log::error('Erreur analyse: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
-            session()->flash('error', 'Une erreur est survenue lors de l\'analyse: ' . $e->getMessage());
-        }
+        $this->cycling = DB::select("
+            WITH cashin_transactions AS (
+                SELECT 
+                    transaction_initiated_time::date as txn_date,
+                    debit_party_identifier,
+                    credit_party_identifier,
+                    actual_amount,
+                    transaction_initiated_time
+                FROM fact_txn_v2
+                WHERE transaction_initiated_time BETWEEN ? AND ?
+                  AND reason_index {$idxCashin}
+                  AND actual_amount > 0
+                LIMIT 1000
+            )
+            SELECT
+                ci.txn_date AS date,
+                ci.debit_party_identifier AS agent,
+                COUNT(*) AS nb_cycles,
+                ci.actual_amount AS montant_par_cycle,
+                SUM(ci.actual_amount) AS total_cashin_fdj,
+                SUM(w.actual_amount) AS total_w2b_fdj,
+                SUM(ci.actual_amount) * 0.0256 AS commission_gagnee,
+                (SUM(ci.actual_amount) * 0.0256) - (ci.actual_amount * 0.0256) AS surplus_commission,
+                AVG(EXTRACT(EPOCH FROM (w.transaction_initiated_time - ci.transaction_initiated_time)) / 60) AS avg_delay_min
+            FROM cashin_transactions ci
+            JOIN fact_txn_v2 s
+                ON s.debit_party_identifier = ci.credit_party_identifier
+                AND s.transaction_initiated_time > ci.transaction_initiated_time
+                AND s.transaction_initiated_time < ci.transaction_initiated_time + {$timeWindowCycle}
+                AND s.reason_index {$idxSend}
+                AND ABS(s.actual_amount - ci.actual_amount) / ci.actual_amount <= ?
+            JOIN fact_txn_v2 w
+                ON w.debit_party_identifier = s.credit_party_identifier
+                AND w.transaction_initiated_time > s.transaction_initiated_time
+                AND w.transaction_initiated_time < s.transaction_initiated_time + {$timeWindowCycle}
+                AND w.reason_index {$idxW2b}
+            GROUP BY ci.txn_date, ci.debit_party_identifier, ci.actual_amount
+            HAVING COUNT(*) >= ?
+            ORDER BY nb_cycles DESC, commission_gagnee DESC
+            LIMIT 100
+        ", [
+            $debut,
+            $fin,
+            $this->amount_tolerance / 100,
+            $this->min_cycles,
+        ]);
+
+        // Conversion en minuscules
+        $toLower = fn($rows) => array_map(
+            fn($r) => array_change_key_case((array)$r, CASE_LOWER),
+            $rows
+        );
+
+        $this->repeat_mp     = $toLower($this->repeat_mp);
+        $this->repeat_cashin = $toLower($this->repeat_cashin);
+        $this->repeat_w2b    = $toLower($this->repeat_w2b);
+        $this->cashin_w2b    = $toLower($this->cashin_w2b);
+        $this->b2w_send_w2b  = $toLower($this->b2w_send_w2b);
+        $this->circulaires   = $toLower($this->circulaires);
+        $this->cycling       = $toLower($this->cycling);
+
+        $this->analyse = true;
+        $this->error_message = '';
+
+    } catch (\Exception $e) {
+        $this->analyse = false;
+        $this->loading = false;
+        $this->error_message = 'Erreur: ' . $e->getMessage();
+        \Log::error('Erreur analyse: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+        session()->flash('error', 'Une erreur est survenue: ' . $e->getMessage());
     }
+
+    // Mettre en cache pour 1 heure
+    Cache::put($cacheKey, [
+        'repeat_mp' => $this->repeat_mp,
+        'repeat_cashin' => $this->repeat_cashin,
+        'repeat_w2b' => $this->repeat_w2b,
+        'cashin_w2b' => $this->cashin_w2b,
+        'b2w_send_w2b' => $this->b2w_send_w2b,
+        'circulaires' => $this->circulaires,
+        'cycling' => $this->cycling,
+    ], 3600);
+
+
+}
 
     public function with(): array
     {
