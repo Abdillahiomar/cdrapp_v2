@@ -239,7 +239,7 @@
         {{-- ── ANCIEN CDRAPP ── --}}
         <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Ancien CDRAPP</p>
 
-       @can('transactions.analyze')
+       @can('ancien_cdrapp.view')
         <a href="{{ route('ancien_cdrapp') }}" wire:navigate
            style="{{ request()->routeIs('ancien_cdrapp') ? $linkActive : $linkInactive }}">
             <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
