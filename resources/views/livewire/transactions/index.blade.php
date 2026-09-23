@@ -84,13 +84,13 @@ new class extends Component {
 
         // Debit Party
         if ($this->DEBIT_MSISDN) {
-            $query->where('debit_party_identifier', 'like', '%' . $this->DEBIT_MSISDN . '%');
+            $query->where('debit_party_identifier', $this->DEBIT_MSISDN);
             
         }
 
         // Credit Party
         if ($this->CREDIT_MSISDN) {
-            $query->where('credit_party_identifier', 'like', '%' . $this->CREDIT_MSISDN . '%');
+            $query->where('credit_party_identifier',$this->CREDIT_MSISDN);
         }
 
         // Transaction types

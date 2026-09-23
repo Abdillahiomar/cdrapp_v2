@@ -47,6 +47,7 @@ new class extends Component {
                 SUM(commission)*100         AS commission,
                 SUM(taxe)*100               AS taxe
             ')
+            ->where('trans_status', 'Completed')
             ->groupBy('txn_type_name', 'alias')
             ->orderByDesc('nb_transactions')
             ->get()
@@ -76,6 +77,7 @@ new class extends Component {
                 SUM(volume_total)*100    AS volume,
                 SUM(revenus)*100         AS revenus
             ')
+            ->where('trans_status', 'Completed')
             ->groupBy('alias', 'txn_type_name')
             ->get()
             ->map(fn($r) => [
@@ -87,8 +89,8 @@ new class extends Component {
 
         // Définition des groupes
         $groupes = [
-            'Airtime'          => ['self top up', 'third top up', 'bulk buy airtime'],
-            'Forfait Mobile'   => ['purchase airtime package'],
+            'Airtime'          => ['self top up', 'third top up', 'bulk buy airtime','purchase airtime package'],
+            
             'Cash In'          => ['customer cash in', 'business cash in'],
             'Cash In'          => ['customer cash in', 'business cash in'],
             'Amana'            => ['ODLoanPayment'],
