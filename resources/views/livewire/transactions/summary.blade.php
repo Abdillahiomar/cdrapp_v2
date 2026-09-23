@@ -90,17 +90,16 @@ new class extends Component {
         // Définition des groupes
         $groupes = [
             'Airtime'          => ['self top up', 'third top up', 'bulk buy airtime','purchase airtime package'],
-            
             'Cash In'          => ['customer cash in', 'business cash in'],
-            'Cash In'          => ['customer cash in', 'business cash in'],
-            'Amana'            => ['ODLoanPayment'],
-            'Amana Repayment'  => ['OD Loan Auto Repayment'],
+            'Cash Our'          => ['customer cash out', 'business cash out'],
             'Virement de Masse'=> ['Bulk B2B Payment','Bulk B2C Payment'],
-            'SP Bulk'          => ['Bulk SP2B Payment','Bulk SP2C Payment'],
-            'Pay Bills'        => ['pay edd bills', 'pay onead bills', 'pay dt bills', 'pay dt bundles'],
-            'Merchant Payment' => ['merchant payment', 'online merchant payment'],
+            'Send Money'          => ['Customer Send Money'],
             'W2B'              => ['bank initiate w2b', 'eab w2b', 'cac w2b', 'boa w2b', 'bcimr w2b', 'saba w2b'],
             'B2W'              => ['bank initiate b2w', 'eab b2w', 'cac b2w', 'boa b2w', 'bcimr b2w', 'saba b2w'],
+            'Pay Bills'        => ['pay edd bills', 'pay onead bills', 'pay dt bills', 'pay dt bundles'],
+            'Merchant Payment' => ['merchant payment', 'online merchant payment'],
+            'Amana'            => ['ODLoanPayment'],
+            'Amana Repayment'  => ['OD Loan Auto Repayment'],
         ];
 
         $result = [];

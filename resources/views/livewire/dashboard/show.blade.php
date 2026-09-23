@@ -31,10 +31,24 @@ new class extends Component {
     public ?float $volume_precedent = null;
     public ?float $variation_volume = null;
 
+    // Suivi Airtime (filtre de dates indépendant)
+    public string $date_debut_airtime = '';
+    public string $date_fin_airtime   = '';
+    public bool   $searched_airtime   = false;
+
+    public array $airtime_serie           = []; // [{jour, volume, nb}]
+    public array $airtime_repartition     = []; // [{type, volume, nb}]
+    public float $airtime_volume_total    = 0;
+    public int   $airtime_nb_transactions = 0;
+    public float $airtime_ticket_moyen    = 0;
+
     public function mount()
     {
         $this->date_debut = Carbon::now()->subDays(7)->format('Y-m-d');
         $this->date_fin   = Carbon::now()->format('Y-m-d');
+
+        $this->date_debut_airtime = Carbon::now()->subDays(7)->format('Y-m-d');
+        $this->date_fin_airtime   = Carbon::now()->format('Y-m-d');
     }
 
     private function reasonIndexesFor(string $needle): array
@@ -187,6 +201,73 @@ if (!empty($idxMerchant)) {
         );
     }
 
+    public function searchAirtime()
+    {
+        set_time_limit(120);
+
+        $debut = $this->date_debut_airtime . ' 00:00:00';
+        $fin   = Carbon::parse($this->date_fin_airtime)->addDay()->format('Y-m-d') . ' 00:00:00';
+
+        // Sous-types Airtime (mêmes libellés que le regroupement du récapitulatif)
+        $airtimeTypes = ['self top up', 'third top up', 'bulk buy airtime', 'purchase airtime package'];
+        $likeClauses  = implode(' OR ', array_fill(0, count($airtimeTypes), 'LOWER(tt.alias) LIKE ?'));
+        $likeParams   = array_map(fn($t) => '%' . strtolower($t) . '%', $airtimeTypes);
+
+        // ── KPIs Airtime ──
+        $kpi = DB::selectOne("
+            SELECT
+                COALESCE(SUM(f.actual_amount), 0) AS volume_total,
+                COUNT(*)                          AS nb_transactions,
+                COALESCE(AVG(f.actual_amount), 0) AS ticket_moyen
+            FROM fact_txn_v2 f
+            JOIN transaction_types tt ON tt.txn_index = f.txn_index
+            WHERE f.transaction_initiated_time >= ? AND f.transaction_initiated_time < ?
+            AND ($likeClauses)
+            AND f.status = 'Completed'
+        ", array_merge([$debut, $fin], $likeParams));
+
+        $this->airtime_volume_total    = (float) $kpi->volume_total;
+        $this->airtime_nb_transactions = (int)   $kpi->nb_transactions;
+        $this->airtime_ticket_moyen    = (float) $kpi->ticket_moyen;
+
+        // ── Série temporelle par jour ──
+        $this->airtime_serie = array_map(fn($r) => (array) $r, DB::select("
+            SELECT
+                f.transaction_initiated_time::date AS jour,
+                COALESCE(SUM(f.actual_amount), 0)  AS volume,
+                COUNT(*)                           AS nb
+            FROM fact_txn_v2 f
+            JOIN transaction_types tt ON tt.txn_index = f.txn_index
+            WHERE f.transaction_initiated_time >= ? AND f.transaction_initiated_time < ?
+            AND ($likeClauses)
+            AND f.status = 'Completed'
+            GROUP BY f.transaction_initiated_time::date
+            ORDER BY jour
+        ", array_merge([$debut, $fin], $likeParams)));
+
+        // ── Répartition par sous-type Airtime ──
+        $this->airtime_repartition = array_map(fn($r) => (array) $r, DB::select("
+            SELECT
+                COALESCE(tt.alias, tt.txn_type_name) AS type,
+                COALESCE(SUM(f.actual_amount), 0)    AS volume,
+                COUNT(*)                             AS nb
+            FROM fact_txn_v2 f
+            JOIN transaction_types tt ON tt.txn_index = f.txn_index
+            WHERE f.transaction_initiated_time >= ? AND f.transaction_initiated_time < ?
+            AND ($likeClauses)
+            AND f.status = 'Completed'
+            GROUP BY COALESCE(tt.alias, tt.txn_type_name)
+            ORDER BY volume DESC
+        ", array_merge([$debut, $fin], $likeParams)));
+
+        $this->searched_airtime = true;
+
+        $this->dispatch('airtime-updated',
+            serie:        $this->airtime_serie,
+            repartition:  $this->airtime_repartition,
+        );
+    }
+
     public function with(): array
     {
         return [];
@@ -323,21 +404,104 @@ if (!empty($idxMerchant)) {
 
     @endif
 
+    {{-- SUIVI AIRTIME --}}
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:20px; margin-bottom:20px;">
+        <p style="font-size:14px; font-weight:700; color:#111827; margin-bottom:16px;">
+            Suivi Airtime (Self Top Up, Third Top Up, Bulk Buy Airtime, Purchase Airtime Package)
+        </p>
+        <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap;">
+            <div>
+                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date début</label>
+                <input type="date" wire:model="date_debut_airtime"
+                       style="border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
+            </div>
+            <div>
+                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date fin</label>
+                <input type="date" wire:model="date_fin_airtime"
+                       style="border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
+            </div>
+            <button wire:click="searchAirtime" wire:loading.attr="disabled" wire:target="searchAirtime"
+                    style="background:#00843D; color:#fff; font-size:13px; font-weight:600; padding:9px 22px; border-radius:8px; border:none; cursor:pointer; display:flex; align-items:center; gap:7px;">
+                <span wire:loading.remove wire:target="searchAirtime">Rechercher</span>
+                <span wire:loading.inline-flex wire:target="searchAirtime" style="align-items:center; gap:7px;">
+                    <svg width="14" height="14" viewBox="0 0 40 40" fill="none" style="animation:spin 0.8s linear infinite;">
+                        <circle cx="20" cy="20" r="16" stroke="rgba(255,255,255,0.3)" stroke-width="4"/>
+                        <path d="M20 4a16 16 0 0116 16" stroke="white" stroke-width="4" stroke-linecap="round"/>
+                    </svg>
+                    Chargement...
+                </span>
+            </button>
+        </div>
+
+        @if(!$searched_airtime)
+            <div style="text-align:center; padding:40px 20px;">
+                <p style="font-size:14px; font-weight:600; color:#111827; margin-bottom:4px;">Aucune donnée à afficher</p>
+                <p style="font-size:12px; color:#9ca3af;">Choisissez une période puis cliquez sur <strong>Rechercher</strong>.</p>
+            </div>
+        @else
+            <div style="display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; margin:20px 0 16px;">
+                <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #00843D;">
+                    <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Valeur total Airtime</p>
+                    <p style="font-size:20px; font-weight:700; color:#111827; margin:0;">{{ number_format($airtime_volume_total * 100, 0, ',', ' ') }}</p>
+                    <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">FDJ</p>
+                </div>
+                <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #1B2F6E;">
+                    <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Nb transactions</p>
+                    <p style="font-size:20px; font-weight:700; color:#111827; margin:0;">{{ number_format($airtime_nb_transactions, 0, ',', ' ') }}</p>
+                    <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">opérations</p>
+                </div>
+                <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #F5A800;">
+                    <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Ticket moyen</p>
+                    <p style="font-size:20px; font-weight:700; color:#111827; margin:0;">{{ number_format($airtime_ticket_moyen * 100, 0, ',', ' ') }}</p>
+                    <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">FDJ / transaction</p>
+                </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns:2fr 1fr; gap:16px;">
+                <div wire:ignore style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px;">
+                    <p style="font-size:13px; font-weight:600; color:#111827; margin:0 0 16px;">Évolution du volume et du nombre de transactions Airtime</p>
+                    <div style="position:relative; height:280px;">
+                        <canvas id="chartAirtimeEvolution"></canvas>
+                    </div>
+                </div>
+                <div wire:ignore style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px;">
+                    <p style="font-size:13px; font-weight:600; color:#111827; margin:0 0 16px;">Répartition par sous-type</p>
+                    <div style="position:relative; height:280px;">
+                        <canvas id="chartAirtimeRepartition"></canvas>
+                    </div>
+                </div>
+            </div>
+        @endif
+    </div>
+
 </div>
 
 @assets
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
 @endassets
 
 @script
 <script>
     let charts = {};
+    let datalabelsRegistered = false;
 
     const palette = ['#00843D','#1B2F6E','#F5A800','#9333ea','#E24B4A','#0891b2','#7A4F00','#6B21A8','#005C2B','#92400E','#0369a1','#be123c'];
 
-    function destroyCharts() {
-        Object.values(charts).forEach(c => { if (c) c.destroy(); });
-        charts = {};
+    function formatFdj(value) {
+        return new Intl.NumberFormat('fr-FR').format(Math.round(value));
+    }
+
+    function ensureDatalabelsRegistered() {
+        if (!datalabelsRegistered && typeof ChartDataLabels !== 'undefined') {
+            Chart.register(ChartDataLabels);
+            Chart.defaults.set('plugins.datalabels', { display: false });
+            datalabelsRegistered = true;
+        }
+    }
+
+    function destroyCharts(keys) {
+        keys.forEach(k => { if (charts[k]) { charts[k].destroy(); delete charts[k]; } });
     }
 
     function renderDashboard(serie, types, canaux) {
@@ -347,7 +511,8 @@ if (!empty($idxMerchant)) {
             return;
         }
 
-        destroyCharts();
+        ensureDatalabelsRegistered();
+        destroyCharts(['evolution', 'types', 'revenus', 'canaux']);
 
         const ctxE = document.getElementById('chartEvolution');
         if (ctxE) {
@@ -361,6 +526,17 @@ if (!empty($idxMerchant)) {
                             data: serie.map(r => Number(r.volume) * 100),
                             backgroundColor: 'rgba(0,132,61,0.6)',
                             yAxisID: 'y',
+                            datalabels: {
+                                display: true,
+                                anchor: 'center',
+                                align: 'top',
+                                offset: 150,
+                                clamp: true,
+                                rotation: -90,
+                                color: '#ffffff',
+                                font: { size: 20, weight: '800' },
+                                formatter: formatFdj,
+                            },
                         },
                         {
                             label: 'Volume ',
@@ -430,12 +606,96 @@ if (!empty($idxMerchant)) {
         }
     }
 
+    function renderAirtime(serie, repartition) {
+        if (typeof Chart === 'undefined') {
+            setTimeout(() => renderAirtime(serie, repartition), 100);
+            return;
+        }
+
+        ensureDatalabelsRegistered();
+        destroyCharts(['airtimeEvolution', 'airtimeRepartition']);
+
+        const ctxAE = document.getElementById('chartAirtimeEvolution');
+        if (ctxAE) {
+            charts.airtimeEvolution = new Chart(ctxAE, {
+                type: 'bar',
+                data: {
+                    labels: serie.map(r => r.jour),
+                    datasets: [
+                        {
+                            label: 'Valeur (FDJ)',
+                            data: serie.map(r => Number(r.volume) * 100),
+                            backgroundColor: 'rgba(0,132,61,0.6)',
+                            yAxisID: 'y',
+                            datalabels: {
+                                display: true,
+                                anchor: 'center',
+                                align: 'center',
+                                rotation: -90,
+
+                                color: '#ffffff',
+
+                                font: {
+                                    size: 11,
+                                    weight: 'bold',
+                                },
+
+                                textStrokeColor: 'rgba(0,0,0,0.5)',
+                                textStrokeWidth: 2,
+
+                                formatter: formatFdj,
+                            },
+                        },
+                        {
+                            label: 'Volume',
+                            data: serie.map(r => Number(r.nb)),
+                            type: 'line',
+                            borderColor: '#1B2F6E',
+                            backgroundColor: '#1B2F6E',
+                            yAxisID: 'y1',
+                            tension: 0.3,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: {
+                        y:  { position: 'left',  title: { display: true, text: 'Valeur (FDJ)' } },
+                        y1: { position: 'right', title: { display: true, text: 'Nb transactions' }, grid: { drawOnChartArea: false } }
+                    }
+                }
+            });
+        }
+
+        const ctxAR = document.getElementById('chartAirtimeRepartition');
+        if (ctxAR) {
+            charts.airtimeRepartition = new Chart(ctxAR, {
+                type: 'doughnut',
+                data: {
+                    labels: repartition.map(r => r.type),
+                    datasets: [{
+                        data: repartition.map(r => Number(r.volume) * 100),
+                        backgroundColor: palette,
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { font: { size: 10 } } } } }
+            });
+        }
+    }
+
     // Écoute l'événement émis après la recherche
     $wire.on('dashboard-updated', (data) => {
         const payload = Array.isArray(data) ? data[0] : data;
         // requestAnimationFrame garantit que le DOM (canvas) est bien inséré
         requestAnimationFrame(() => {
             renderDashboard(payload.serie || [], payload.types || [], payload.canaux || []);
+        });
+    });
+
+    $wire.on('airtime-updated', (data) => {
+        const payload = Array.isArray(data) ? data[0] : data;
+        requestAnimationFrame(() => {
+            renderAirtime(payload.serie || [], payload.repartition || []);
         });
     });
 </script>
