@@ -2,6 +2,11 @@
 
 use Livewire\Volt\Component;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
+use App\Models\Customer;
+use App\Models\DashboardAggregation;
+use App\Models\BankBalance;
+use App\Models\AllBalance;
 use Carbon\Carbon;
 
 new class extends Component {
@@ -15,6 +20,12 @@ new class extends Component {
     public array $top_agents_ci    = [];
     public array $top_masters_bci  = [];
     public array $top_send_clients = [];
+
+    // ─── KPI directeur ───
+    public array $fraud_summary   = [];
+    public array $bank_health     = [];
+    public array $repartition     = [];
+    public int   $nouveaux_clients = 0;
 
     public function mount()
     {
@@ -34,6 +45,101 @@ new class extends Component {
     private function inClause(array $indexes): string
     {
         return empty($indexes) ? 'IN (NULL)' : 'IN (' . implode(',', $indexes) . ')';
+    }
+
+    /**
+     * Reprend les résultats déjà calculés (et mis en cache) par la page Fraudes,
+     * plutôt que de relancer la détection (coûteuse : CTE récursives, cycling...).
+     */
+    private function fraudSummary(): array
+    {
+        if (Carbon::parse($this->date_debut)->diffInDays(Carbon::parse($this->date_fin)) > 30) {
+            return ['available' => false, 'reason' => 'periode_trop_longue'];
+        }
+
+        $cacheKey = 'fraude_analysis_' . md5($this->date_debut . $this->date_fin . 2 . 1 . 10);
+
+        if (!Cache::has($cacheKey)) {
+            return ['available' => false, 'reason' => 'non_calcule'];
+        }
+
+        $cached = Cache::get($cacheKey);
+
+        $breakdown = [
+            'MP répétitifs'                        => count($cached['repeat_mp']     ?? []),
+            'Cash In répétitifs'                   => count($cached['repeat_cashin'] ?? []),
+            'W2B répétitifs'                        => count($cached['repeat_w2b']    ?? []),
+            'Cash In → MP → Business Cash Out'      => count($cached['circulaires']   ?? []),
+            'Cycling (Cash In → Send → W2B/Cash Out)' => count($cached['cycling']       ?? []),
+        ];
+
+        return [
+            'available' => true,
+            'total'     => array_sum($breakdown),
+            'breakdown' => $breakdown,
+        ];
+    }
+
+    /** Soldes bancaires / Money en Circulation à la dernière date disponible. */
+    private function bankHealthSummary(): array
+    {
+        $latestBalanceDate = BankBalance::max('balance_date');
+        $latestCircDate    = AllBalance::max('account_date');
+
+        $grandTotal = $latestBalanceDate
+            ? (float) BankBalance::whereDate('balance_date', $latestBalanceDate)->sum('balance')
+            : 0.0;
+
+        $moneyEnCirculation = null;
+        if ($latestCircDate) {
+            $totalBalanceAllAccounts = (float) AllBalance::query()
+                ->whereDate('account_date', $latestCircDate)
+                ->sum('balance');
+
+            $totalEmoneyDestroy = (float) AllBalance::query()
+                ->where('account_type', 'SP E-Money Destroy Account')
+                ->whereDate('account_date', $latestCircDate)
+                ->sum('balance');
+
+            $moneyEnCirculation = $totalBalanceAllAccounts - $totalEmoneyDestroy;
+        }
+
+        $ratio = ($moneyEnCirculation !== null && $moneyEnCirculation > 0)
+            ? ($grandTotal / $moneyEnCirculation) * 100
+            : null;
+
+        return [
+            'latest_balance_date'  => $latestBalanceDate,
+            'grand_total'          => $grandTotal,
+            'money_en_circulation' => $moneyEnCirculation,
+            'ratio'                => $ratio,
+        ];
+    }
+
+    /** Nombre de clients KYC vus pour la première fois durant la période. */
+    private function nouveauxClientsSummary(): int
+    {
+        return Customer::whereBetween('first_seen_at', [
+            $this->date_debut . ' 00:00:00',
+            Carbon::parse($this->date_fin)->addDay()->format('Y-m-d') . ' 00:00:00',
+        ])->count();
+    }
+
+    /** Répartition du volume/nombre de transactions par type, sur la période. */
+    private function repartitionParType(): array
+    {
+        return DashboardAggregation::query()
+            ->whereBetween('jour', [$this->date_debut, $this->date_fin])
+            ->groupBy('txn_type_name')
+            ->selectRaw('txn_type_name, SUM(nb_transactions) as nb, SUM(volume_total) as volume')
+            ->orderByDesc('nb')
+            ->get()
+            ->map(fn ($r) => [
+                'type'   => $r->txn_type_name ?: 'Non catégorisé',
+                'nb'     => (int) $r->nb,
+                'volume' => (float) $r->volume,
+            ])
+            ->all();
     }
 
     public function search()
@@ -132,6 +238,12 @@ new class extends Component {
         $this->top_masters_bci  = $toArray($this->top_masters_bci);
         $this->top_send_clients = $toArray($this->top_send_clients);
 
+        // ── KPI directeur ──
+        $this->fraud_summary    = $this->fraudSummary();
+        $this->bank_health      = $this->bankHealthSummary();
+        $this->nouveaux_clients = $this->nouveauxClientsSummary();
+        $this->repartition      = $this->repartitionParType();
+
         $this->searched = true;
     }
 
@@ -200,6 +312,91 @@ new class extends Component {
             <p style="font-size:12px; color:#9ca3af;">Choisissez une période puis cliquez sur <strong>Rechercher</strong>.</p>
         </div>
     @else
+
+        {{-- KPI DIRECTEUR --}}
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px,1fr)); gap:16px; margin-bottom:20px;">
+
+            {{-- Alertes fraude --}}
+            <div style="background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:18px;">
+                <p style="font-size:12px; font-weight:600; color:#6b7280; margin:0 0 8px;">Alertes fraude (période)</p>
+                @if($fraud_summary['available'] ?? false)
+                    <p style="font-size:26px; font-weight:800; margin:0 0 8px; color:{{ $fraud_summary['total'] > 0 ? '#E24B4A' : '#00843D' }};">
+                        {{ $fraud_summary['total'] }}
+                    </p>
+                    <div style="font-size:11px; color:#6b7280; line-height:1.7;">
+                        @foreach($fraud_summary['breakdown'] as $label => $nb)
+                            @if($nb > 0)
+                                <div style="display:flex; justify-content:space-between;">
+                                    <span>{{ $label }}</span>
+                                    <span style="font-weight:600; color:#111827;">{{ $nb }}</span>
+                                </div>
+                            @endif
+                        @endforeach
+                    </div>
+                    <a href="{{ route('fraudes.index') }}" style="display:inline-block; margin-top:10px; font-size:11px; color:#1B2F6E; font-weight:600; text-decoration:none;">Voir le détail →</a>
+                @else
+                    <p style="font-size:12px; color:#9ca3af; margin:0 0 8px;">
+                        {{ ($fraud_summary['reason'] ?? '') === 'periode_trop_longue'
+                            ? 'Période > 30 jours — non disponible.'
+                            : "Analyse non lancée pour cette période." }}
+                    </p>
+                    <a href="{{ route('fraudes.index') }}" style="font-size:11px; color:#1B2F6E; font-weight:600; text-decoration:none;">Lancer l'analyse →</a>
+                @endif
+            </div>
+
+            {{-- Santé bancaire --}}
+            <div style="background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:18px;">
+                <p style="font-size:12px; font-weight:600; color:#6b7280; margin:0 0 8px;">Santé bancaire</p>
+                @if($bank_health['latest_balance_date'] ?? null)
+                    <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                        <span style="font-size:11px; color:#6b7280;">Solde bancaire total</span>
+                        <span style="font-size:13px; font-weight:700; color:#111827;">{{ number_format($bank_health['grand_total'], 0, ',', ' ') }} DJF</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                        <span style="font-size:11px; color:#6b7280;">Money en Circulation</span>
+                        <span style="font-size:13px; font-weight:700; color:#378ADD;">
+                            {{ $bank_health['money_en_circulation'] !== null ? number_format($bank_health['money_en_circulation'], 0, ',', ' ') . ' DJF' : 'N/A' }}
+                        </span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; border-top:1px solid #f3f4f6; padding-top:6px; margin-top:6px;">
+                        <span style="font-size:12px; font-weight:600; color:#111827;">Ratio d'équivalence</span>
+                        <span style="font-size:16px; font-weight:800; color:{{ ($bank_health['ratio'] ?? 0) >= 100 ? '#005C2B' : '#E24B4A' }};">
+                            {{ $bank_health['ratio'] !== null ? number_format($bank_health['ratio'], 2, ',', ' ') . ' %' : 'N/A' }}
+                        </span>
+                    </div>
+                    <p style="font-size:10px; color:#9ca3af; margin:8px 0 0;">Au {{ \Carbon\Carbon::parse($bank_health['latest_balance_date'])->format('d/m/Y') }}</p>
+                @else
+                    <p style="font-size:12px; color:#9ca3af;">Aucun solde bancaire enregistré.</p>
+                @endif
+            </div>
+
+            {{-- Croissance clients --}}
+            <div style="background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:18px;">
+                <p style="font-size:12px; font-weight:600; color:#6b7280; margin:0 0 8px;">Nouveaux clients KYC (période)</p>
+                <p style="font-size:26px; font-weight:800; color:#1B2F6E; margin:0;">{{ number_format($nouveaux_clients, 0, ',', ' ') }}</p>
+            </div>
+        </div>
+
+        {{-- Répartition par type de transaction --}}
+        @if(!empty($repartition))
+            <div style="background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:18px; margin-bottom:20px;">
+                <p style="font-size:13px; font-weight:600; color:#111827; margin:0 0 14px;">Répartition des transactions par type</p>
+                @php $maxNb = collect($repartition)->max('nb') ?: 1; @endphp
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                    @foreach($repartition as $r)
+                        <div>
+                            <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:3px;">
+                                <span style="color:#374151; font-weight:600;">{{ $r['type'] }}</span>
+                                <span style="color:#6b7280;">{{ number_format($r['nb'], 0, ',', ' ') }} txn · {{ number_format($r['volume'], 0, ',', ' ') }} DJF</span>
+                            </div>
+                            <div style="background:#F3F4F6; border-radius:6px; height:8px; overflow:hidden;">
+                                <div style="background:#1B2F6E; height:100%; width:{{ $maxNb > 0 ? round($r['nb'] / $maxNb * 100, 1) : 0 }}%;"></div>
+                            </div>
+                        </div>
+                    @endforeach
+                </div>
+            </div>
+        @endif
 
         {{-- 1. TOP 10 clients Merchant Payment --}}
         @include('livewire.top10._top_table', [

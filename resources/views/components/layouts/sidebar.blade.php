@@ -37,7 +37,7 @@
                     <rect x="1" y="9" width="6" height="6" rx="1.5"/>
                     <rect x="9" y="9" width="6" height="6" rx="1.5"/>
                 </svg>
-                Tableau de bord - Manager
+                 Manager - Tableau de bord
                 @if(request()->routeIs('dashboard.manager'))
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
@@ -53,7 +53,7 @@
                     <rect x="1" y="9" width="6" height="6" rx="1.5"/>
                     <rect x="9" y="9" width="6" height="6" rx="1.5"/>
                 </svg>
-                Tableau de bord - Transactions
+                Tableau de bord
                 @if(request()->routeIs('dashboard.show'))
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
@@ -69,7 +69,7 @@
                     <rect x="1" y="9" width="6" height="6" rx="1.5"/>
                     <rect x="9" y="9" width="6" height="6" rx="1.5"/>
                 </svg>
-                Tableau de bord - Revenue
+                TOP 10
                 @if(request()->routeIs('dashboard.index'))
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
@@ -134,14 +134,14 @@
 
         @can('relever.bancaire')
             <a href="{{ route('finance.bank-balances') }}" wire:navigate
-               style="{{ request()->routeIs('finance.bank-balances.*') ? $linkActive : $linkInactive }}">
+               style="{{ request()->routeIs('finance.*') ? $linkActive : $linkInactive }}">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
                     <rect x="2" y="5" width="12" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/>
                     <path d="M5 5V4a3 3 0 016 0v1"/>
                     <circle cx="8" cy="9" r="1.5"/>
                 </svg>
                 Relevés Bancaire
-                @if(request()->routeIs('finance.bank-balances.*'))
+                @if(request()->routeIs('finance.*'))
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
             </a>

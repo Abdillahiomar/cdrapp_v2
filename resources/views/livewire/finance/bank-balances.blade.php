@@ -4,7 +4,9 @@ use App\Models\Bank;
 use App\Models\BankAccount;
 use App\Models\AllBalance;
 use App\Models\BankBalance;
+use App\Exports\BankBalancesExport;
 use Livewire\Volt\Component;
+use Maatwebsite\Excel\Facades\Excel;
 use Carbon\Carbon;
 
 new class extends Component {
@@ -113,15 +115,8 @@ new class extends Component {
         $this->loadRows();
     }
 
-    public function with(): array
+    protected function computeSummary(): array
     {
-        $banks = Bank::where('is_active', true)->orderBy('name')->get();
-
-        $accountsByBank = BankAccount::where('is_active', true)
-            ->orderBy('account_label')
-            ->get()
-            ->groupBy('bank_id');
-
         $entries = BankBalance::with('account.bank')
             ->whereDate('balance_date', $this->balance_date)
             ->get();
@@ -152,14 +147,51 @@ new class extends Component {
             ? ($grandTotal / $moneyEnCirculation) * 100
             : null;
 
+        return compact('entries', 'byBank', 'grandTotal', 'moneyEnCirculation', 'ratioEquivalence', 'hasMoneyCirculationData');
+    }
+
+    public function exportExcel()
+    {
+        $summary = $this->computeSummary();
+
+        if ($summary['entries']->isEmpty()) {
+            return;
+        }
+
+        $export = new BankBalancesExport(
+            $summary['entries'],
+            (float) $summary['grandTotal'],
+            (float) $summary['moneyEnCirculation'],
+            $summary['ratioEquivalence'],
+            $this->balance_date,
+            $this->money_circulation_date,
+        );
+
+        return Excel::download(
+            $export,
+            'soldes_bancaires_' . $this->balance_date . '.xlsx'
+        );
+    }
+
+    public function with(): array
+    {
+        $banks = Bank::where('is_active', true)->orderBy('name')->get();
+
+        $accountsByBank = BankAccount::where('is_active', true)
+            ->orderBy('account_label')
+            ->get()
+            ->groupBy('bank_id');
+
+        $summary = $this->computeSummary();
+
         return [
             'banks'                    => $banks,
             'accountsByBank'           => $accountsByBank,
-            'byBank'                   => $byBank,
-            'grandTotal'               => $grandTotal,
-            'moneyEnCirculation'       => $moneyEnCirculation,
-            'ratioEquivalence'         => $ratioEquivalence,
-            'hasMoneyCirculationData'  => $hasMoneyCirculationData,
+            'byBank'                   => $summary['byBank'],
+            'grandTotal'               => $summary['grandTotal'],
+            'moneyEnCirculation'       => $summary['moneyEnCirculation'],
+            'ratioEquivalence'         => $summary['ratioEquivalence'],
+            'hasMoneyCirculationData'  => $summary['hasMoneyCirculationData'],
         ];
     }
 };
@@ -253,13 +285,21 @@ new class extends Component {
         @endif
     </div>
 
-    {{-- RÉCAPITULATIF PAR BANQUE --}}
+    
     {{-- RÉCAPITULATIF PAR BANQUE --}}
     @if($byBank->isNotEmpty())
         <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px;">
-            <p style="font-size:13px; font-weight:600; color:#111827; margin-bottom:12px;">
-                Récapitulatif — {{ \Carbon\Carbon::parse($balance_date)->format('d/m/Y') }}
-            </p>
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">
+                    Récapitulatif — {{ \Carbon\Carbon::parse($balance_date)->format('d/m/Y') }}
+                </p>
+                <button type="button" wire:click="exportExcel"
+                        wire:loading.attr="disabled" wire:target="exportExcel"
+                        style="background:#005C2B; color:#fff; font-size:12px; font-weight:600; padding:7px 14px; border-radius:7px; border:none; cursor:pointer; display:flex; align-items:center; gap:6px;">
+                    <span wire:loading.remove wire:target="exportExcel">Exporter Excel</span>
+                    <span wire:loading wire:target="exportExcel">Export en cours...</span>
+                </button>
+            </div>
             <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:10px; margin-bottom:14px;">
                 @foreach($byBank as $bankName => $total)
                     <div style="background:#F7F8FC; border-radius:8px; padding:10px 12px;">

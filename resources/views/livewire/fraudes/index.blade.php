@@ -22,18 +22,16 @@ new class extends Component {
     public array $repeat_mp        = [];
     public array $repeat_cashin    = [];
     public array $repeat_w2b       = [];
-    public array $cashin_w2b       = [];
-    public array $b2w_send_w2b     = [];
     public array $circulaires      = [];
     public array $cycling          = [];
 
     // Index pré-calculés
-    private array $idxMerchant = [];
-    private array $idxCashin   = [];
-    private array $idxW2b      = [];
-    private array $idxSend     = [];
-    private array $idxB2w      = [];
-    private array $idxCashout  = [];
+    private array $idxMerchant       = [];
+    private array $idxCashin         = [];
+    private array $idxW2b            = [];
+    private array $idxSend           = [];
+    private array $idxCashoutGeneral = [];
+    private array $idxBizCashout     = [];
 
     // Messages d'erreur
     public string $error_message = '';
@@ -50,11 +48,15 @@ new class extends Component {
      */
     private function reasonIndexesFor(string $needle): array
     {
-        return \App\Models\ReasonType::query()
-            ->whereRaw('LOWER(reason_name) LIKE ?', ['%' . strtolower($needle) . '%'])
-            ->pluck('reason_index')
-            ->map(fn($v) => (int) $v)
-            ->all();
+        // reason_types change rarement : on évite de refaire les 6 lookups
+        // à chaque clic sur "Lancer l'analyse".
+        return Cache::remember('reason_idx_' . md5($needle), 86400, function () use ($needle) {
+            return \App\Models\ReasonType::query()
+                ->whereRaw('LOWER(reason_name) LIKE ?', ['%' . strtolower($needle) . '%'])
+                ->pluck('reason_index')
+                ->map(fn($v) => (int) $v)
+                ->all();
+        });
     }
 
     /**
@@ -106,8 +108,6 @@ new class extends Component {
         $this->repeat_mp = $cached['repeat_mp'];
         $this->repeat_cashin = $cached['repeat_cashin'];
         $this->repeat_w2b = $cached['repeat_w2b'];
-        $this->cashin_w2b = $cached['cashin_w2b'];
-        $this->b2w_send_w2b = $cached['b2w_send_w2b'];
         $this->circulaires = $cached['circulaires'];
         $this->cycling = $cached['cycling'];
         $this->analyse = true;
@@ -129,19 +129,19 @@ new class extends Component {
         $isSingleDay = $this->date_debut === $this->date_fin;
 
         // Résolution des indexes
-        $this->idxMerchant = $this->reasonIndexesFor('merchant payment');
-        $this->idxCashin   = $this->reasonIndexesFor('customer cash in');
-        $this->idxW2b      = $this->reasonIndexesFor('w2b');
-        $this->idxSend     = $this->reasonIndexesFor('send money');
-        $this->idxB2w      = $this->reasonIndexesFor('b2w');
-        $this->idxCashout  = $this->reasonIndexesFor('cash out');
+        $this->idxMerchant       = $this->reasonIndexesFor('merchant payment');
+        $this->idxCashin         = $this->reasonIndexesFor('customer cash in');
+        $this->idxW2b            = $this->reasonIndexesFor('w2b');
+        $this->idxSend           = $this->reasonIndexesFor('send money');
+        $this->idxCashoutGeneral = $this->reasonIndexesFor('cash out');
+        $this->idxBizCashout     = $this->reasonIndexesFor('business cash out');
 
-        $idxMerchant = $this->inClause($this->idxMerchant);
-        $idxCashin   = $this->inClause($this->idxCashin);
-        $idxW2b      = $this->inClause($this->idxW2b);
-        $idxSend     = $this->inClause($this->idxSend);
-        $idxB2w      = $this->inClause($this->idxB2w);
-        $idxCashout  = $this->inClause($this->idxCashout);
+        $idxMerchant       = $this->inClause($this->idxMerchant);
+        $idxCashin         = $this->inClause($this->idxCashin);
+        $idxW2b            = $this->inClause($this->idxW2b);
+        $idxSend           = $this->inClause($this->idxSend);
+        $idxCashoutGeneral = $this->inClause($this->idxCashoutGeneral);
+        $idxBizCashout     = $this->inClause($this->idxBizCashout);
 
         // ── OPTIMISATION 1 : Utiliser des CTE pour réduire les scans ──
         
@@ -202,91 +202,17 @@ new class extends Component {
             LIMIT 100
         ", [$debut, $fin]);
 
-        // 4. Cash In → W2B - optimisé avec LIMIT et fenêtre temporelle réduite
-        $timeWindow = $isSingleDay ? "INTERVAL '1 hour'" : "INTERVAL '6 hours'";
-        
-        $this->cashin_w2b = DB::select("
-            WITH cashin_transactions AS (
-                SELECT 
-                    transaction_initiated_time,
-                    debit_party_identifier,
-                    credit_party_identifier,
-                    actual_amount
-                FROM fact_txn_v2
-                WHERE transaction_initiated_time BETWEEN ? AND ?
-                  AND reason_index {$idxCashin}
-                LIMIT 500
-            )
-            SELECT
-                ci.transaction_initiated_time::date AS date,
-                ci.debit_party_identifier AS distributeur,
-                ci.credit_party_identifier AS client,
-                ci.actual_amount AS cashin_amount,
-                ci.transaction_initiated_time AS cashin_time,
-                w.actual_amount AS w2b_amount,
-                w.transaction_initiated_time AS w2b_time,
-                w.credit_party_identifier AS banque,
-                EXTRACT(EPOCH FROM (w.transaction_initiated_time - ci.transaction_initiated_time)) / 60 AS delay_minutes
-            FROM cashin_transactions ci
-            JOIN fact_txn_v2 w
-                ON w.credit_party_identifier = ci.credit_party_identifier
-                AND w.transaction_initiated_time > ci.transaction_initiated_time
-                AND w.transaction_initiated_time < ci.transaction_initiated_time + {$timeWindow}
-                AND w.reason_index {$idxW2b}
-            ORDER BY ci.transaction_initiated_time
-            LIMIT 200
-        ", [$debut, $fin]);
-
-        // 5. B2W → Send → W2B - optimisé
-        $timeWindow1 = $isSingleDay ? "INTERVAL '30 minutes'" : "INTERVAL '2 hours'";
-        $timeWindow2 = $isSingleDay ? "INTERVAL '30 minutes'" : "INTERVAL '2 hours'";
-
-        $this->b2w_send_w2b = DB::select("
-            WITH b2w_transactions AS (
-                SELECT 
-                    transaction_initiated_time,
-                    credit_party_identifier,
-                    actual_amount
-                FROM fact_txn_v2
-                WHERE transaction_initiated_time BETWEEN ? AND ?
-                  AND reason_index {$idxB2w}
-                LIMIT 300
-            )
-            SELECT
-                b.transaction_initiated_time::date AS date,
-                b.credit_party_identifier AS source_bank,
-                b.credit_party_identifier AS client_a,
-                b.actual_amount AS b2w_amount,
-                b.transaction_initiated_time AS b2w_time,
-                s.credit_party_identifier AS client_b,
-                s.actual_amount AS send_amount,
-                s.transaction_initiated_time AS send_time,
-                w.actual_amount AS w2b_amount,
-                w.transaction_initiated_time AS w2b_time,
-                w.credit_party_identifier AS destination_bank,
-                EXTRACT(EPOCH FROM (s.transaction_initiated_time - b.transaction_initiated_time)) / 60 AS delay_b2w_send_min,
-                EXTRACT(EPOCH FROM (w.transaction_initiated_time - s.transaction_initiated_time)) / 60 AS delay_send_w2b_min
-            FROM b2w_transactions b
-            JOIN fact_txn_v2 s
-                ON s.credit_party_identifier = b.credit_party_identifier
-                AND s.transaction_initiated_time > b.transaction_initiated_time
-                AND s.transaction_initiated_time < b.transaction_initiated_time + {$timeWindow1}
-                AND s.reason_index {$idxSend}
-            JOIN fact_txn_v2 w
-                ON w.credit_party_identifier = s.credit_party_identifier
-                AND w.transaction_initiated_time > s.transaction_initiated_time
-                AND w.transaction_initiated_time < s.transaction_initiated_time + {$timeWindow2}
-                AND w.reason_index {$idxW2b}
-            ORDER BY b.transaction_initiated_time
-            LIMIT 200
-        ", [$debut, $fin]);
-
-        // 6. Scénarios circulaires - optimisé
-        $timeWindowCirc = $isSingleDay ? "INTERVAL '1 hour'" : "INTERVAL '6 hours'";
+        // 4. Scénarios circulaires : Customer Cash In → Merchant Payment → Business Cash Out
+        // (le client reçoit un cash-in, paie un marchand avec, et le marchand
+        // ressort le même montant en Business Cash Out peu après)
+        $timeWindowCircMinutes = $isSingleDay ? 60 : 360;
+        $timeWindowCirc = "INTERVAL '{$timeWindowCircMinutes} minutes'";
+        $debutCashin = Carbon::parse($debut)->subMinutes($timeWindowCircMinutes)->format('Y-m-d H:i:s');
+        $finCashout  = Carbon::parse($fin)->addMinutes($timeWindowCircMinutes)->format('Y-m-d H:i:s');
 
         $this->circulaires = DB::select("
             WITH mp_transactions AS (
-                SELECT 
+                SELECT
                     transaction_initiated_time,
                     debit_party_identifier,
                     credit_party_identifier,
@@ -295,6 +221,25 @@ new class extends Component {
                 WHERE transaction_initiated_time BETWEEN ? AND ?
                   AND reason_index {$idxMerchant}
                 LIMIT 300
+            ),
+            cashin_transactions AS (
+                SELECT
+                    transaction_initiated_time,
+                    debit_party_identifier,
+                    credit_party_identifier
+                FROM fact_txn_v2
+                WHERE transaction_initiated_time BETWEEN ? AND ?
+                  AND reason_index {$idxCashin}
+            ),
+            cashout_transactions AS (
+                SELECT
+                    transaction_initiated_time,
+                    debit_party_identifier,
+                    credit_party_identifier,
+                    actual_amount
+                FROM fact_txn_v2
+                WHERE transaction_initiated_time BETWEEN ? AND ?
+                  AND reason_index {$idxBizCashout}
             )
             SELECT
                 mp.transaction_initiated_time::date AS date,
@@ -315,68 +260,140 @@ new class extends Component {
                     ELSE 'Activité inhabituelle'
                 END AS flags
             FROM mp_transactions mp
-            JOIN fact_txn_v2 ci
+            JOIN cashin_transactions ci
                 ON ci.credit_party_identifier = mp.debit_party_identifier
                 AND ci.transaction_initiated_time < mp.transaction_initiated_time
                 AND ci.transaction_initiated_time > mp.transaction_initiated_time - {$timeWindowCirc}
-                AND ci.reason_index {$idxCashin}
-            JOIN fact_txn_v2 bco
+            JOIN cashout_transactions bco
                 ON bco.debit_party_identifier = mp.credit_party_identifier
                 AND bco.actual_amount = mp.actual_amount
                 AND bco.transaction_initiated_time > mp.transaction_initiated_time
                 AND bco.transaction_initiated_time < mp.transaction_initiated_time + {$timeWindowCirc}
-                AND bco.reason_index {$idxCashout}
             ORDER BY delay_minutes ASC
             LIMIT 200
-        ", [$debut, $fin]);
+        ", [$debut, $fin, $debutCashin, $fin, $debut, $finCashout]);
 
-        // 7. Cycling - optimisé
-        $timeWindowCycle = $isSingleDay ? "INTERVAL '2 hours'" : "INTERVAL '12 hours'";
+        // 5. Cycling de commission : Cash In → Send Money (n fois, n <= max_depth) → W2B ou Cash Out.
+        // CTE récursive : à chaque étape on suit le "porteur" courant de l'argent
+        // via un Send Money dont le montant reste proche du cash-in d'origine
+        // (tolérance %), jusqu'à ce qu'il sorte du système (W2B ou Cash Out) ou
+        // que la profondeur max soit atteinte. Les tables send/exit sont
+        // pré-filtrées une seule fois (CTE non récursives) pour que chaque étape
+        // de la récursion fasse un Hash Join, pas un scan corrélé.
+        $timeWindowCycleMinutes = $isSingleDay ? 120 : 720;
+        $timeWindowCycle = "INTERVAL '{$timeWindowCycleMinutes} minutes'";
+        $maxDepth = max(1, (int) $this->max_depth);
+        $finSendCycle = Carbon::parse($fin)->addMinutes($timeWindowCycleMinutes * $maxDepth)->format('Y-m-d H:i:s');
+        $finExitCycle = Carbon::parse($fin)->addMinutes($timeWindowCycleMinutes * ($maxDepth + 1))->format('Y-m-d H:i:s');
 
         $this->cycling = DB::select("
-            WITH cashin_transactions AS (
-                SELECT 
-                    transaction_initiated_time::date as txn_date,
-                    debit_party_identifier,
-                    credit_party_identifier,
-                    actual_amount,
-                    transaction_initiated_time
+            WITH RECURSIVE cashin_base AS (
+                SELECT
+                    transaction_id,
+                    transaction_initiated_time::date AS txn_date,
+                    debit_party_identifier  AS agent,
+                    credit_party_identifier AS holder,
+                    actual_amount           AS origin_amount,
+                    transaction_initiated_time AS origin_time
                 FROM fact_txn_v2
                 WHERE transaction_initiated_time BETWEEN ? AND ?
                   AND reason_index {$idxCashin}
                   AND actual_amount > 0
-                LIMIT 1000
+                LIMIT 500
+            ),
+            send_pool AS (
+                SELECT
+                    transaction_initiated_time,
+                    debit_party_identifier,
+                    credit_party_identifier,
+                    actual_amount
+                FROM fact_txn_v2
+                WHERE transaction_initiated_time BETWEEN ? AND ?
+                  AND reason_index {$idxSend}
+            ),
+            exit_pool AS (
+                SELECT
+                    transaction_initiated_time,
+                    debit_party_identifier,
+                    actual_amount
+                FROM fact_txn_v2
+                WHERE transaction_initiated_time BETWEEN ? AND ?
+                  AND (reason_index {$idxW2b} OR reason_index {$idxCashoutGeneral})
+            ),
+            chain AS (
+                SELECT
+                    cb.transaction_id            AS origin_id,
+                    cb.txn_date,
+                    cb.agent,
+                    cb.origin_amount,
+                    cb.origin_time,
+                    cb.holder AS current_holder,
+                    cb.origin_time AS current_time,
+                    0 AS depth
+                FROM cashin_base cb
+
+                UNION ALL
+
+                SELECT
+                    c.origin_id,
+                    c.txn_date,
+                    c.agent,
+                    c.origin_amount,
+                    c.origin_time,
+                    sp.credit_party_identifier AS current_holder,
+                    sp.transaction_initiated_time AS current_time,
+                    c.depth + 1
+                FROM chain c
+                JOIN send_pool sp
+                    ON sp.debit_party_identifier = c.current_holder
+                    AND sp.transaction_initiated_time > c.current_time
+                    AND sp.transaction_initiated_time < c.current_time + {$timeWindowCycle}
+                    AND ABS(sp.actual_amount - c.origin_amount) / c.origin_amount <= ?
+                WHERE c.depth < ?
+            ),
+            successful_exits AS (
+                SELECT DISTINCT ON (chain.origin_id)
+                    chain.origin_id,
+                    chain.txn_date,
+                    chain.agent,
+                    chain.origin_amount,
+                    chain.origin_time,
+                    chain.depth AS nb_hops,
+                    ep.transaction_initiated_time AS exit_time,
+                    ep.actual_amount AS exit_amount
+                FROM chain
+                JOIN exit_pool ep
+                    ON ep.debit_party_identifier = chain.current_holder
+                    AND ep.transaction_initiated_time > chain.current_time
+                    AND ep.transaction_initiated_time < chain.current_time + {$timeWindowCycle}
+                WHERE chain.depth >= 1
+                ORDER BY chain.origin_id, chain.depth ASC, ep.transaction_initiated_time ASC
             )
             SELECT
-                ci.txn_date AS date,
-                ci.debit_party_identifier AS agent,
+                se.txn_date AS date,
+                se.agent,
                 COUNT(*) AS nb_cycles,
-                ci.actual_amount AS montant_par_cycle,
-                SUM(ci.actual_amount) AS total_cashin_fdj,
-                SUM(w.actual_amount) AS total_w2b_fdj,
-                SUM(ci.actual_amount) * 0.0256 AS commission_gagnee,
-                (SUM(ci.actual_amount) * 0.0256) - (ci.actual_amount * 0.0256) AS surplus_commission,
-                AVG(EXTRACT(EPOCH FROM (w.transaction_initiated_time - ci.transaction_initiated_time)) / 60) AS avg_delay_min
-            FROM cashin_transactions ci
-            JOIN fact_txn_v2 s
-                ON s.debit_party_identifier = ci.credit_party_identifier
-                AND s.transaction_initiated_time > ci.transaction_initiated_time
-                AND s.transaction_initiated_time < ci.transaction_initiated_time + {$timeWindowCycle}
-                AND s.reason_index {$idxSend}
-                AND ABS(s.actual_amount - ci.actual_amount) / ci.actual_amount <= ?
-            JOIN fact_txn_v2 w
-                ON w.debit_party_identifier = s.credit_party_identifier
-                AND w.transaction_initiated_time > s.transaction_initiated_time
-                AND w.transaction_initiated_time < s.transaction_initiated_time + {$timeWindowCycle}
-                AND w.reason_index {$idxW2b}
-            GROUP BY ci.txn_date, ci.debit_party_identifier, ci.actual_amount
+                AVG(se.nb_hops) AS profondeur_moy,
+                MAX(se.nb_hops) AS profondeur_max,
+                AVG(se.origin_amount) AS montant_moyen,
+                SUM(se.origin_amount) AS total_cashin_fdj,
+                SUM(se.exit_amount) AS total_exit_fdj,
+                SUM(se.origin_amount) * 0.0256 AS commission_gagnee,
+                AVG(EXTRACT(EPOCH FROM (se.exit_time - se.origin_time)) / 60) AS avg_delay_min
+            FROM successful_exits se
+            GROUP BY se.txn_date, se.agent
             HAVING COUNT(*) >= ?
             ORDER BY nb_cycles DESC, commission_gagnee DESC
             LIMIT 100
         ", [
             $debut,
             $fin,
+            $debut,
+            $finSendCycle,
+            $debut,
+            $finExitCycle,
             $this->amount_tolerance / 100,
+            $maxDepth,
             $this->min_cycles,
         ]);
 
@@ -389,8 +406,6 @@ new class extends Component {
         $this->repeat_mp     = $toLower($this->repeat_mp);
         $this->repeat_cashin = $toLower($this->repeat_cashin);
         $this->repeat_w2b    = $toLower($this->repeat_w2b);
-        $this->cashin_w2b    = $toLower($this->cashin_w2b);
-        $this->b2w_send_w2b  = $toLower($this->b2w_send_w2b);
         $this->circulaires   = $toLower($this->circulaires);
         $this->cycling       = $toLower($this->cycling);
 
@@ -410,8 +425,6 @@ new class extends Component {
         'repeat_mp' => $this->repeat_mp,
         'repeat_cashin' => $this->repeat_cashin,
         'repeat_w2b' => $this->repeat_w2b,
-        'cashin_w2b' => $this->cashin_w2b,
-        'b2w_send_w2b' => $this->b2w_send_w2b,
         'circulaires' => $this->circulaires,
         'cycling' => $this->cycling,
     ], 3600);
@@ -497,14 +510,13 @@ new class extends Component {
     @if($analyse)
 
         {{-- KPIs GLOBAUX --}}
-        <div style="display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:10px; margin-bottom:20px;">
+        <div style="display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:10px; margin-bottom:20px;">
             @php
                 $kpis = [
-                    ['label' => 'MP répétitifs',    'val' => count($repeat_mp),     'color' => '#F5A800'],
+                    ['label' => 'MP répétitifs',     'val' => count($repeat_mp),     'color' => '#F5A800'],
                     ['label' => 'Cash In répétitifs','val' => count($repeat_cashin), 'color' => '#1B2F6E'],
-                    ['label' => 'Cash In → W2B',    'val' => count($cashin_w2b),    'color' => '#E24B4A'],
-                    ['label' => 'B2W → Send → W2B', 'val' => count($b2w_send_w2b),  'color' => '#9333ea'],
-                    ['label' => 'Cycling agents',   'val' => count($cycling),        'color' => '#E24B4A'],
+                    ['label' => 'Circuits Cash In→MP→Cash Out', 'val' => count($circulaires), 'color' => '#9333ea'],
+                    ['label' => 'Cycling agents',    'val' => count($cycling),       'color' => '#E24B4A'],
                 ];
             @endphp
             @foreach($kpis as $kpi)
@@ -620,138 +632,25 @@ new class extends Component {
 
         </div>
 
-        {{-- 3. CASH IN → W2B --}}
-        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; margin-bottom:16px;">
-            <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; gap:8px;">
-                <span style="width:8px; height:8px; border-radius:50%; background:#E24B4A; display:inline-block;"></span>
-                <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">Cash In → W2B</p>
-                <span style="margin-left:auto; background:#FDECEA; color:#7F1D1D; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">{{ count($cashin_w2b) }} cas</span>
-            </div>
-            @if(empty($cashin_w2b))
-                <p style="padding:20px; font-size:12px; color:#9ca3af;">Aucun résultat.</p>
-            @else
-                <div style="overflow-x:auto; overflow-y:auto; max-height:350px;">
-                    <table style="width:100%; border-collapse:collapse; font-size:11px;">
-                        <thead><tr style="background:#F7F8FC;">
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Date</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Distributeur</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Client</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Cash In</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">W2B</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Banque</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Délai (min)</th>
-                        </tr></thead>
-                        <tbody>
-                            @foreach($cashin_w2b as $row)
-                                <tr style="border-bottom:1px solid #f3f4f6;" onmouseover="this.style.background='#F7F8FC'" onmouseout="this.style.background='transparent'">
-                                    <td style="padding:8px 12px; color:#6b7280;">{{ $row['date'] }}</td>
-                                    <td style="padding:8px 12px; color:#374151;">{{ $row['distributeur'] }}</td>
-                                    <td style="padding:8px 12px; font-weight:600; color:#111827;">{{ $row['client'] }}</td>
-                                    <td style="padding:8px 12px; color:#374151;">{{ number_format($row['cashin_amount'], 0, ',', ' ') }} FDJ</td>
-                                    <td style="padding:8px 12px; color:#374151;">{{ number_format($row['w2b_amount'], 0, ',', ' ') }} FDJ</td>
-                                    <td style="padding:8px 12px; color:#374151;">{{ trim(strstr($row['banque'], '-') ?: $row['banque'], '- ') }}</td>
-                                    <td style="padding:8px 12px;">
-                                        <span style="background:{{ $row['delay_minutes'] < 30 ? '#FDECEA' : '#E5F5ED' }}; color:{{ $row['delay_minutes'] < 30 ? '#7F1D1D' : '#005C2B' }}; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">
-                                            {{ round($row['delay_minutes']) }} min
-                                        </span>
-                                    </td>
-                                </tr>
-                            @endforeach
-                        </tbody>
-                    </table>
-                </div>
-            @endif
-        </div>
-
-        {{-- 4. B2W → Send → W2B --}}
+        {{-- 3. CIRCUITS : Customer Cash In → Merchant Payment → Business Cash Out --}}
         <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; margin-bottom:16px;">
             <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; gap:8px;">
                 <span style="width:8px; height:8px; border-radius:50%; background:#9333ea; display:inline-block;"></span>
-                <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">B2W → Send Money → W2B</p>
-                <span style="margin-left:auto; background:#F3E8FF; color:#6B21A8; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">{{ count($b2w_send_w2b) }} cas</span>
-            </div>
-
-            @if(empty($b2w_send_w2b))
-                <p style="padding:20px; font-size:12px; color:#9ca3af;">Aucun scénario B2W → Send → W2B détecté.</p>
-            @else
-                <div style="overflow-x:auto; overflow-y:auto; max-height:350px;">
-                    <table style="width:100%; border-collapse:collapse; font-size:11px;">
-                        <thead>
-                            <tr style="background:#F7F8FC;">
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">#</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Date</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Banque source</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Client A</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Montant B2W</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Client B</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Montant Send</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Montant W2B</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Banque dest.</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Délai B2W→Send</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Délai Send→W2B</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach($b2w_send_w2b as $i => $row)
-                                <tr style="border-bottom:1px solid #f3f4f6;"
-                                    onmouseover="this.style.background='#F7F8FC'"
-                                    onmouseout="this.style.background='transparent'">
-                                    <td style="padding:8px 12px; color:#9ca3af;">{{ $i + 1 }}</td>
-                                    <td style="padding:8px 12px; color:#6b7280; white-space:nowrap;">{{ $row['date'] }}</td>
-                                    <td style="padding:8px 12px; color:#374151; white-space:nowrap;">{{ trim(strstr($row['source_bank'], '-') ?: $row['source_bank'], '- ') }}</td>
-                                    <td style="padding:8px 12px; font-weight:600; color:#111827; white-space:nowrap;">{{ $row['client_a'] }}</td>
-                                    <td style="padding:8px 12px; color:#374151; white-space:nowrap;">{{ number_format($row['b2w_amount'], 0, ',', ' ') }} FDJ</td>
-                                    <td style="padding:8px 12px; font-weight:600; color:#111827; white-space:nowrap;">{{ $row['client_b'] }}</td>
-                                    <td style="padding:8px 12px; color:#374151; white-space:nowrap;">{{ number_format($row['send_amount'], 0, ',', ' ') }} FDJ</td>
-                                    <td style="padding:8px 12px; color:#374151; white-space:nowrap;">{{ number_format($row['w2b_amount'], 0, ',', ' ') }} FDJ</td>
-                                    <td style="padding:8px 12px; color:#374151; white-space:nowrap;">{{ trim(strstr($row['destination_bank'], '-') ?: $row['destination_bank'], '- ') }}</td>
-                                    <td style="padding:8px 12px;">
-                                        <span style="background:{{ $row['delay_b2w_send_min'] < 30 ? '#FDECEA' : '#E5F5ED' }};
-                                                    color:{{ $row['delay_b2w_send_min'] < 30 ? '#7F1D1D' : '#005C2B' }};
-                                                    font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">
-                                            {{ round($row['delay_b2w_send_min']) }} min
-                                        </span>
-                                    </td>
-                                    <td style="padding:8px 12px;">
-                                        <span style="background:{{ $row['delay_send_w2b_min'] < 30 ? '#FDECEA' : '#E5F5ED' }};
-                                                    color:{{ $row['delay_send_w2b_min'] < 30 ? '#7F1D1D' : '#005C2B' }};
-                                                    font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">
-                                            {{ round($row['delay_send_w2b_min']) }} min
-                                        </span>
-                                    </td>
-                                </tr>
-                            @endforeach
-                        </tbody>
-                    </table>
-                </div>
-
-                @if(count($b2w_send_w2b) > 5)
-                    <div style="padding:8px 16px; border-top:1px solid #e5e7eb; background:#FAFAFA;">
-                        <p style="font-size:10px; color:#9ca3af; margin:0;">
-                            {{ count($b2w_send_w2b) }} résultats — faites défiler pour voir tout
-                        </p>
-                    </div>
-                @endif
-            @endif
-        </div>
-
-        {{-- 5. CIRCULAIRES --}}
-        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; margin-bottom:16px;">
-            <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; gap:8px;">
-                <span style="width:8px; height:8px; border-radius:50%; background:#9333ea; display:inline-block;"></span>
-                <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">Scénarios circulaires</p>
+                <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">Cash In → Merchant Payment → Business Cash Out</p>
                 <span style="margin-left:auto; background:#F3E8FF; color:#6B21A8; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">{{ count($circulaires) }} cas</span>
             </div>
             @if(empty($circulaires))
-                <p style="padding:20px; font-size:12px; color:#9ca3af;">Aucun scénario circulaire détecté.</p>
+                <p style="padding:20px; font-size:12px; color:#9ca3af;">Aucun circuit Cash In → Merchant Payment → Business Cash Out détecté.</p>
             @else
                 <div style="overflow-x:auto;">
                     <table style="width:100%; border-collapse:collapse; font-size:11px;">
                         <thead><tr style="background:#F7F8FC;">
                             <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Date</th>
+                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Cash In (de)</th>
                             <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Client</th>
                             <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Marchand</th>
                             <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Montant</th>
+                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Business Cash Out (vers)</th>
                             <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Délai</th>
                             <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Flags</th>
                         </tr></thead>
@@ -761,9 +660,11 @@ new class extends Component {
                                     onmouseover="this.style.background='#F7F8FC'"
                                     onmouseout="this.style.background='transparent'">
                                     <td style="padding:8px 12px; color:#6b7280;">{{ $row['date'] }}</td>
+                                    <td style="padding:8px 12px; color:#374151;">{{ $row['cashin_from'] }}</td>
                                     <td style="padding:8px 12px; font-weight:600; color:#111827;">{{ $row['client'] }}</td>
                                     <td style="padding:8px 12px; color:#374151;">{{ $row['merchant'] }}</td>
                                     <td style="padding:8px 12px; color:#374151;">{{ number_format($row['amount'], 0, ',', ' ') }} FDJ</td>
+                                    <td style="padding:8px 12px; color:#374151;">{{ $row['cashout_to'] }}</td>
                                     <td style="padding:8px 12px;">
                                         @php $delay = round($row['delay_minutes']); @endphp
                                         <span style="background:{{ $delay < 10 ? '#FDECEA' : ($delay < 30 ? '#FFF3D0' : '#E5F5ED') }};
@@ -781,11 +682,11 @@ new class extends Component {
             @endif
         </div>
 
-        {{-- 6. CYCLING DE COMMISSION --}}
+        {{-- 4. CYCLING DE COMMISSION : Cash In → Send Money (n fois) → W2B ou Cash Out --}}
         <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; margin-bottom:16px;">
             <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; gap:8px;">
                 <span style="width:8px; height:8px; border-radius:50%; background:#E24B4A; display:inline-block;"></span>
-                <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">Cycling de commission</p>
+                <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">Cash In → Send Money (n fois) → W2B / Cash Out</p>
                 <span style="margin-left:auto; background:#FDECEA; color:#7F1D1D; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">{{ count($cycling) }} agents</span>
             </div>
 
@@ -795,7 +696,6 @@ new class extends Component {
                 @php
                     $totalCycles     = array_sum(array_column($cycling, 'nb_cycles'));
                     $totalCommission = array_sum(array_column($cycling, 'commission_gagnee'));
-                    $totalSurplus    = array_sum(array_column($cycling, 'surplus_commission'));
                     $totalVolume     = array_sum(array_column($cycling, 'total_cashin_fdj'));
                 @endphp
 
@@ -803,8 +703,8 @@ new class extends Component {
                     @foreach([
                         ['label' => 'Agents alertés',    'val' => count($cycling)],
                         ['label' => 'Total cycles',       'val' => $totalCycles],
+                        ['label' => 'Volume Cash In total', 'val' => number_format($totalVolume, 0, ',', ' ') . ' FDJ'],
                         ['label' => 'Commission totale',  'val' => number_format($totalCommission, 0, ',', ' ') . ' FDJ'],
-                        ['label' => 'Surplus frauduleux', 'val' => number_format($totalSurplus, 0, ',', ' ') . ' FDJ'],
                     ] as $kpi)
                         <div style="padding:14px 16px; border-right:1px solid #e5e7eb;">
                             <p style="font-size:10px; color:#6b7280; margin:0 0 4px;">{{ $kpi['label'] }}</p>
@@ -820,10 +720,11 @@ new class extends Component {
                                 <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Date</th>
                                 <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Agent</th>
                                 <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Cycles</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Montant/cycle</th>
+                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Profondeur (moy/max)</th>
+                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Montant moyen</th>
                                 <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Total Cash In</th>
+                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Total sorti (W2B/Cash Out)</th>
                                 <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Commission</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Surplus</th>
                                 <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Délai moy.</th>
                             </tr>
                         </thead>
@@ -840,18 +741,19 @@ new class extends Component {
                                         </span>
                                     </td>
                                     <td style="padding:8px 12px; color:#374151;">
-                                        {{ number_format($row['montant_par_cycle'], 0, ',', ' ') }} FDJ
+                                        {{ round($row['profondeur_moy'], 1) }} / {{ $row['profondeur_max'] }} hops
+                                    </td>
+                                    <td style="padding:8px 12px; color:#374151;">
+                                        {{ number_format($row['montant_moyen'], 0, ',', ' ') }} FDJ
                                     </td>
                                     <td style="padding:8px 12px; color:#374151;">
                                         {{ number_format($row['total_cashin_fdj'], 0, ',', ' ') }} FDJ
                                     </td>
                                     <td style="padding:8px 12px; color:#374151;">
-                                        {{ number_format($row['commission_gagnee'], 0, ',', ' ') }} FDJ
+                                        {{ number_format($row['total_exit_fdj'], 0, ',', ' ') }} FDJ
                                     </td>
-                                    <td style="padding:8px 12px;">
-                                        <span style="background:#FDECEA; color:#7F1D1D; font-size:10px; font-weight:700; padding:2px 8px; border-radius:12px;">
-                                            {{ number_format($row['surplus_commission'], 0, ',', ' ') }} FDJ
-                                        </span>
+                                    <td style="padding:8px 12px; color:#374151;">
+                                        {{ number_format($row['commission_gagnee'], 0, ',', ' ') }} FDJ
                                     </td>
                                     <td style="padding:8px 12px; color:#374151;">
                                         {{ round($row['avg_delay_min'], 1) }} min
