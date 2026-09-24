@@ -53,7 +53,7 @@ new class extends Component {
 
     private function reasonIndexesFor(string $needle): array
     {
-        return \App\Models\reasonType::query()
+        return \App\Models\ReasonType::query()
             ->whereRaw('LOWER(reason_name) LIKE ?', ['%' . strtolower($needle) . '%'])
             ->pluck('reason_index')
             ->map(fn($v) => (int) $v)
@@ -529,12 +529,19 @@ if (!empty($idxMerchant)) {
                             datalabels: {
                                 display: true,
                                 anchor: 'center',
-                                align: 'top',
-                                offset: 150,
-                                clamp: true,
+                                align: 'center',
                                 rotation: -90,
+
                                 color: '#ffffff',
-                                font: { size: 20, weight: '800' },
+
+                                font: {
+                                    size: 11,
+                                    weight: 'bold',
+                                },
+
+                                textStrokeColor: 'rgba(0,0,0,0.5)',
+                                textStrokeWidth: 2,
+
                                 formatter: formatFdj,
                             },
                         },
