@@ -66,7 +66,7 @@ new class extends Component {
     {
         if (empty($this->TXN_INDEXES)) return collect();
 
-        return \App\Models\reasonType::whereIn('txn_index', $this->TXN_INDEXES)
+        return \App\Models\ReasonType::whereIn('txn_index', $this->TXN_INDEXES)
             ->orderBy('reason_name')
             ->get();
     }
