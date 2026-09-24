@@ -253,7 +253,7 @@
         @endcan
 
         {{-- ── ADMINISTRATION ── --}}
-        @canany(['admin.users.view', 'admin.roles.view', 'admin.departments.view'])
+        @canany(['admin.users.view', 'admin.roles.view', 'admin.departments.view', 'admin.audit-logs.view'])
             <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Administration</p>
 
             @can('admin.users.view')
@@ -279,6 +279,20 @@
                     </svg>
                     Rôles & Permissions
                     @if(request()->routeIs('admin.roles.*'))
+                        <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
+                    @endif
+                </a>
+            @endcan
+
+            @can('admin.audit-logs.view')
+                <a href="{{ route('admin.audit-logs.index') }}" wire:navigate
+                   style="{{ request()->routeIs('admin.audit-logs.*') ? $linkActive : $linkInactive }}">
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
+                        <rect x="1" y="2" width="14" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/>
+                        <path d="M4 6h8M4 9h8M4 12h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                    </svg>
+                    Journal de connexions
+                    @if(request()->routeIs('admin.audit-logs.*'))
                         <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                     @endif
                 </a>

@@ -41,6 +41,7 @@ Volt::route('/amana_report', 'amana_report.index')->name('amana_report.index')->
 Volt::route('/ancien_cdrapp', 'transactions.old_transactions')->name('ancien_cdrapp')->middleware('auth');
 Volt::route('/admin/roles', 'admin.roles.index')->name('admin.roles.index')->middleware(['auth', 'permission:admin.roles.view']);
 Volt::route('/admin/users', 'admin.users.index')->name('admin.users.index');
+Volt::route('/admin/audit-logs', 'admin.audit-logs.index')->name('admin.audit-logs.index')->middleware(['auth', 'permission:admin.audit-logs.view']);
 Volt::route('/profiles', 'admin.users.profile')->name('profile.index')->middleware('auth');
 
 

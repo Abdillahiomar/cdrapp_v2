@@ -26,6 +26,7 @@ class RolesPermissionsSeeder extends Seeder
             'admin.users.view', 'admin.users.create', 'admin.users.edit', 'admin.users.delete',
             'admin.roles.view', 'admin.roles.manage',
             'admin.departments.view', 'admin.departments.manage',
+            'admin.audit-logs.view',
         ];
 
         foreach ($permissions as $perm) {
