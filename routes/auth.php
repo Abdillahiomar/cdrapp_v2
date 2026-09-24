@@ -19,6 +19,9 @@ Route::middleware('guest')->group(function () {
 
 });
 
+Volt::route('session-expired', 'pages.auth.session-expired')
+    ->name('session-expired');
+
 Route::post('logout', function () {
     auth()->guard('web')->logout();
     request()->session()->invalidate();

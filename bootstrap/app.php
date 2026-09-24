@@ -17,6 +17,10 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission' => \Spatie\Permission\Middleware\PermissionMiddleware::class,
             'role_or_permission' => \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
         ]);
+
+        // Accès à une route protégée sans session valide (expirée ou jamais connecté)
+        // → page dédiée au lieu d'atterrir silencieusement sur /login.
+        $middleware->redirectGuestsTo(fn () => route('session-expired'));
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //

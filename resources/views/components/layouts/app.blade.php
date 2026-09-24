@@ -110,6 +110,21 @@
     @livewireScripts
 
     <script>
+        // Session expirée pendant une interaction Livewire (CSRF token périmé, 419)
+        // → page dédiée au lieu de la boîte de dialogue générique de Livewire.
+        document.addEventListener('livewire:init', () => {
+            Livewire.hook('request', ({ fail }) => {
+                fail(({ status, preventDefault }) => {
+                    if (status === 419) {
+                        preventDefault();
+                        window.location.href = '{{ route('session-expired') }}';
+                    }
+                });
+            });
+        });
+    </script>
+
+    <script>
         document.addEventListener('livewire:navigate', () => {
             Swal.fire({
                 title: 'Chargement...',
