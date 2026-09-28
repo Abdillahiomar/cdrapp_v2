@@ -160,7 +160,7 @@ new class extends Component {
             SELECT
                 debit_party_identifier          AS client,
                 COUNT(*)                        AS nb_operations,
-                SUM(actual_amount)*100              AS volume_total
+                SUM(actual_amount)              AS volume_total
             FROM fact_txn_v2
             WHERE transaction_initiated_time >= ? AND transaction_initiated_time < ?
               AND reason_index {$idxMerchant}
@@ -175,7 +175,7 @@ new class extends Component {
             SELECT
                 credit_party_identifier         AS marchand,
                 COUNT(*)                        AS nb_operations,
-                SUM(actual_amount)*100              AS volume_total
+                SUM(actual_amount)              AS volume_total
             FROM fact_txn_v2
             WHERE transaction_initiated_time >= ? AND transaction_initiated_time < ?
               AND reason_index {$idxMerchant}
@@ -191,7 +191,7 @@ new class extends Component {
                 debit_party_identifier          AS agent,
                 COUNT(*)                        AS nb_operations,
                 SUM(commission_amount)          AS total_commission,
-                SUM(actual_amount)*100              AS volume_total
+                SUM(actual_amount)              AS volume_total
             FROM fact_txn_v2
             WHERE transaction_initiated_time >= ? AND transaction_initiated_time < ?
               AND reason_index {$idxCashin}
@@ -206,7 +206,7 @@ new class extends Component {
             SELECT
                 debit_party_identifier          AS master,
                 COUNT(*)                        AS nb_operations,
-                SUM(actual_amount)*100              AS volume_total
+                SUM(actual_amount)             AS volume_total
             FROM fact_txn_v2
             WHERE transaction_initiated_time >= ? AND transaction_initiated_time < ?
               AND reason_index {$idxBusiness}
