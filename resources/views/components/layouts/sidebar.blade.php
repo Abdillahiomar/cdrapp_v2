@@ -28,7 +28,7 @@
         {{-- ── PRINCIPAL ── --}}
         <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:4px;">Principal</p>
 
-        @can('dashboard.view')
+        @can('dashboard.admin')
             <a href="{{ route('dashboard.manager') }}" wire:navigate
                style="{{ request()->routeIs('dashboard.manager') ? $linkActive : $linkInactive }}">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
@@ -44,7 +44,7 @@
             </a>
         @endcan
 
-        @can('dashboard.view')
+        @can('dashboard.analytics')
             <a href="{{ route('dashboard.show') }}" wire:navigate
                style="{{ request()->routeIs('dashboard.show') ? $linkActive : $linkInactive }}">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
