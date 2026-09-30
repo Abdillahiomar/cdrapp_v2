@@ -21,8 +21,8 @@ Volt::route('/dashboard', 'dashboard.index')->name('dashboard.index');
 Volt::route('/tableau_de_bord_revenue', 'dashboard.show')->name('dashboard.show');
 Volt::route('/reporting/transactions', 'dashboard.transactions-dashboard')->name('reporting.transactions');
 
-Volt::route('/fraudes', 'fraudes.index')->name('fraudes.index')->middleware('auth');
-Volt::route('/blanchiment', 'fraudes.aml')->name('aml.index')->middleware('auth');
+Volt::route('/fraudes', 'fraudes.aml')->name('aml.index')->middleware('auth');
+Volt::route('/detection_de_fraude', 'fraudes.index')->name('fraudes.index')->middleware('auth');
 
 Volt::route('/operations/bulk_search', 'operations.index')->name('operations.index')->middleware('auth');
 Volt::route('/organizations', 'organizations.index')->name('organizations.index')->middleware('auth');

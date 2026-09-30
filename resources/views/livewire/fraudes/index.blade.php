@@ -1,892 +1,615 @@
 <?php
 
 use Livewire\Volt\Component;
-use App\Models\Transaction;
+use Livewire\WithPagination;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\Cache;
 
 new class extends Component {
 
-    public string $date_debut = '';
-    public string $date_fin   = '';
-    public bool   $analyse    = false;
-    public bool   $loading    = false;
+    use WithPagination;
 
-    // Paramètres cycling
-    public int   $min_cycles        = 2;
-    public int   $amount_tolerance  = 1;
-    public int   $max_depth         = 10;
+    // ── Commission indue sur Cash In répétés (agent/client) ──
+    public string $comm_date_debut = '';
+    public string $comm_date_fin   = '';
+    public int    $comm_min_cashin = 3;
+    public bool   $comm_searched   = false;
 
-    // Résultats
-    public array $repeat_mp        = [];
-    public array $repeat_cashin    = [];
-    public array $repeat_w2b       = [];
-    public array $circulaires      = [];
-    public array $cycling          = [];
+    // ── Structuring (S1/S2) ──
+    public string $struct_date_debut = '';
+    public string $struct_date_fin   = '';
+    public int    $struct_min_agents = 3;
+    public bool   $struct_searched   = false;
 
-    // Index pré-calculés
-    private array $idxMerchant       = [];
-    private array $idxCashin         = [];
-    private array $idxW2b            = [];
-    private array $idxSend           = [];
-    private array $idxCashoutGeneral = [];
-    private array $idxBizCashout     = [];
+    public ?string $struct_expanded_customer = null;
+    public array   $struct_detail            = [];
 
-    // Messages d'erreur
-    public string $error_message = '';
+    // ── Chaînes de transactions (S3) ──
+    public string $chain_date_debut = '';
+    public string $chain_date_fin   = '';
+    public bool   $chain_searched   = false;
 
-    public function mount()
+    public ?int  $chain_expanded_id = null;
+    public array $chain_members     = [];
+
+    public function mount(): void
     {
-        $this->date_debut = Carbon::now()->subDays(7)->format('Y-m-d');
-        $this->date_fin   = Carbon::now()->format('Y-m-d');
+        $this->comm_date_debut = Carbon::now()->subDays(7)->format('Y-m-d');
+        $this->comm_date_fin   = Carbon::now()->format('Y-m-d');
+
+        $this->struct_date_debut = Carbon::now()->subDays(7)->format('Y-m-d');
+        $this->struct_date_fin   = Carbon::now()->format('Y-m-d');
+
+        $this->chain_date_debut = Carbon::now()->subDays(7)->format('Y-m-d');
+        $this->chain_date_fin   = Carbon::now()->format('Y-m-d');
+    }
+
+    public function analyserCommission(): void
+    {
+        $this->comm_searched = true;
+        $this->resetPage('commissionPage');
+    }
+
+    public function analyserStructuring(): void
+    {
+        $this->struct_searched            = true;
+        $this->struct_expanded_customer   = null;
+        $this->struct_detail              = [];
+        $this->resetPage('structPage');
+    }
+
+    public function analyserChains(): void
+    {
+        $this->chain_searched      = true;
+        $this->chain_expanded_id   = null;
+        $this->chain_members       = [];
+        $this->resetPage('chainPage');
     }
 
     /**
-     * Résout les reason_index correspondant à un motif de libellé (LIKE),
-     * en interrogeant reason_types une seule fois.
+     * Détail des agents pour un client (S1), sur la période analysée.
      */
-    private function reasonIndexesFor(string $needle): array
+    public function toggleStructCustomer(string $customerId): void
     {
-        // reason_types change rarement : on évite de refaire les 6 lookups
-        // à chaque clic sur "Lancer l'analyse".
-        return Cache::remember('reason_idx_' . md5($needle), 86400, function () use ($needle) {
-            return \App\Models\ReasonType::query()
-                ->whereRaw('LOWER(reason_name) LIKE ?', ['%' . strtolower($needle) . '%'])
-                ->pluck('reason_index')
-                ->map(fn($v) => (int) $v)
-                ->all();
-        });
-    }
-
-    /**
-     * Transforme une liste d'index en fragment SQL "IN (...)" sécurisé.
-     * Liste vide => "IN (NULL)" (ne matche aucune ligne).
-     */
-    private function inClause(array $indexes): string
-    {
-        if (empty($indexes)) {
-            return 'IN (NULL)';
-        }
-        return 'IN (' . implode(',', $indexes) . ')';
-    }
-
-    /**
-     * Vérifie si la période est valide
-     */
-    private function validatePeriod(): bool
-    {
-        $debut = Carbon::parse($this->date_debut);
-        $fin = Carbon::parse($this->date_fin);
-
-        if ($debut->gt($fin)) {
-            $this->error_message = 'La date de début doit être antérieure à la date de fin.';
-            return false;
-        }
-
-        if ($debut->diffInDays($fin) > 30) {
-            $this->error_message = 'La période ne peut pas dépasser 30 jours.';
-            return false;
-        }
-
-        return true;
-    }
-
-    public function lancer()
-{
-    // Générer une clé de cache unique basée sur les paramètres
-    $cacheKey = 'fraude_analysis_' . md5(
-        $this->date_debut . 
-        $this->date_fin . 
-        $this->min_cycles . 
-        $this->amount_tolerance . 
-        $this->max_depth
-    );
-    // Vérifier si les résultats sont en cache
-    if (Cache::has($cacheKey)) {
-        $cached = Cache::get($cacheKey);
-        $this->repeat_mp = $cached['repeat_mp'];
-        $this->repeat_cashin = $cached['repeat_cashin'];
-        $this->repeat_w2b = $cached['repeat_w2b'];
-        $this->circulaires = $cached['circulaires'];
-        $this->cycling = $cached['cycling'];
-        $this->analyse = true;
-        session()->flash('info', 'Résultats chargés depuis le cache.');
-        return;
-    }
-    try {
-        set_time_limit(300);
-        ini_set('memory_limit', '512M');
-
-        if (!$this->validatePeriod()) {
-            $this->analyse = false;
-            session()->flash('error', $this->error_message);
+        if ($this->struct_expanded_customer === $customerId) {
+            $this->struct_expanded_customer = null;
+            $this->struct_detail            = [];
             return;
         }
 
-        $debut = $this->date_debut . ' 00:00:00';
-        $fin   = $this->date_fin   . ' 23:59:59';
-        $isSingleDay = $this->date_debut === $this->date_fin;
+        $this->struct_expanded_customer = $customerId;
 
-        // Résolution des indexes
-        $this->idxMerchant       = $this->reasonIndexesFor('merchant payment');
-        $this->idxCashin         = $this->reasonIndexesFor('customer cash in');
-        $this->idxW2b            = $this->reasonIndexesFor('w2b');
-        $this->idxSend           = $this->reasonIndexesFor('send money');
-        $this->idxCashoutGeneral = $this->reasonIndexesFor('cash out');
-        $this->idxBizCashout     = $this->reasonIndexesFor('business cash out');
-
-        $idxMerchant       = $this->inClause($this->idxMerchant);
-        $idxCashin         = $this->inClause($this->idxCashin);
-        $idxW2b            = $this->inClause($this->idxW2b);
-        $idxSend           = $this->inClause($this->idxSend);
-        $idxCashoutGeneral = $this->inClause($this->idxCashoutGeneral);
-        $idxBizCashout     = $this->inClause($this->idxBizCashout);
-
-        // ── OPTIMISATION 1 : Utiliser des CTE pour réduire les scans ──
-        
-        // 1. MP répétitifs - optimisé
-        $this->repeat_mp = DB::select("
-            WITH filtered_transactions AS (
-                SELECT debit_party_identifier, credit_party_identifier
-                FROM fact_txn_v2
-                WHERE transaction_initiated_time BETWEEN ? AND ?
-                  AND reason_index {$idxMerchant}
-            )
-            SELECT 
-                debit_party_identifier,
-                credit_party_identifier,
-                COUNT(*) as nb_paiements
-            FROM filtered_transactions
-            GROUP BY debit_party_identifier, credit_party_identifier
-            HAVING COUNT(*) > 2
-            ORDER BY nb_paiements DESC
-            LIMIT 100
-        ", [$debut, $fin]);
-
-        // 2. Cash In répétitifs - optimisé
-        $this->repeat_cashin = DB::select("
-            WITH filtered_transactions AS (
-                SELECT debit_party_identifier, credit_party_identifier
-                FROM fact_txn_v2
-                WHERE transaction_initiated_time BETWEEN ? AND ?
-                  AND reason_index {$idxCashin}
-            )
-            SELECT 
-                debit_party_identifier,
-                credit_party_identifier,
-                COUNT(*) as nb_cashin
-            FROM filtered_transactions
-            GROUP BY debit_party_identifier, credit_party_identifier
-            HAVING COUNT(*) >= 2
-            ORDER BY nb_cashin DESC
-            LIMIT 100
-        ", [$debut, $fin]);
-
-        // 3. W2B répétitifs - optimisé
-        $this->repeat_w2b = DB::select("
-            WITH filtered_transactions AS (
-                SELECT debit_party_identifier, credit_party_identifier
-                FROM fact_txn_v2
-                WHERE transaction_initiated_time BETWEEN ? AND ?
-                  AND reason_index {$idxW2b}
-            )
-            SELECT 
-                debit_party_identifier,
-                credit_party_identifier,
-                COUNT(*) as nb_w2b
-            FROM filtered_transactions
-            GROUP BY debit_party_identifier, credit_party_identifier
-            HAVING COUNT(*) >= 2
-            ORDER BY nb_w2b DESC
-            LIMIT 100
-        ", [$debut, $fin]);
-
-        // 4. Scénarios circulaires : Customer Cash In → Merchant Payment → Business Cash Out
-        // (le client reçoit un cash-in, paie un marchand avec, et le marchand
-        // ressort le même montant en Business Cash Out peu après)
-        $timeWindowCircMinutes = $isSingleDay ? 60 : 360;
-        $timeWindowCirc = "INTERVAL '{$timeWindowCircMinutes} minutes'";
-        $debutCashin = Carbon::parse($debut)->subMinutes($timeWindowCircMinutes)->format('Y-m-d H:i:s');
-        $finCashout  = Carbon::parse($fin)->addMinutes($timeWindowCircMinutes)->format('Y-m-d H:i:s');
-
-        $this->circulaires = DB::select("
-            WITH mp_transactions AS (
-                SELECT
-                    transaction_initiated_time,
-                    debit_party_identifier,
-                    credit_party_identifier,
-                    actual_amount
-                FROM fact_txn_v2
-                WHERE transaction_initiated_time BETWEEN ? AND ?
-                  AND reason_index {$idxMerchant}
-                LIMIT 300
-            ),
-            cashin_transactions AS (
-                SELECT
-                    transaction_initiated_time,
-                    debit_party_identifier,
-                    credit_party_identifier
-                FROM fact_txn_v2
-                WHERE transaction_initiated_time BETWEEN ? AND ?
-                  AND reason_index {$idxCashin}
-            ),
-            cashout_transactions AS (
-                SELECT
-                    transaction_initiated_time,
-                    debit_party_identifier,
-                    credit_party_identifier,
-                    actual_amount
-                FROM fact_txn_v2
-                WHERE transaction_initiated_time BETWEEN ? AND ?
-                  AND reason_index {$idxBizCashout}
-            )
-            SELECT
-                mp.transaction_initiated_time::date AS date,
-                ci.debit_party_identifier AS cashin_from,
-                ci.transaction_initiated_time AS ci_time,
-                mp.debit_party_identifier AS client,
-                mp.credit_party_identifier AS merchant,
-                mp.transaction_initiated_time AS mp_time,
-                bco.transaction_initiated_time AS bco_time,
-                mp.actual_amount AS amount,
-                bco.credit_party_identifier AS cashout_to,
-                EXTRACT(EPOCH FROM (bco.transaction_initiated_time - mp.transaction_initiated_time)) / 60 AS delay_minutes,
-                CASE
-                    WHEN EXTRACT(EPOCH FROM (bco.transaction_initiated_time - mp.transaction_initiated_time)) / 60 < 10
-                        THEN 'Cashout rapide'
-                    WHEN mp.actual_amount >= 20000
-                        THEN 'Montant élevé'
-                    ELSE 'Activité inhabituelle'
-                END AS flags
-            FROM mp_transactions mp
-            JOIN cashin_transactions ci
-                ON ci.credit_party_identifier = mp.debit_party_identifier
-                AND ci.transaction_initiated_time < mp.transaction_initiated_time
-                AND ci.transaction_initiated_time > mp.transaction_initiated_time - {$timeWindowCirc}
-            JOIN cashout_transactions bco
-                ON bco.debit_party_identifier = mp.credit_party_identifier
-                AND bco.actual_amount = mp.actual_amount
-                AND bco.transaction_initiated_time > mp.transaction_initiated_time
-                AND bco.transaction_initiated_time < mp.transaction_initiated_time + {$timeWindowCirc}
-            ORDER BY delay_minutes ASC
-            LIMIT 200
-        ", [$debut, $fin, $debutCashin, $fin, $debut, $finCashout]);
-
-        // 5. Cycling de commission : Cash In → Send Money (n fois, n <= max_depth) → W2B ou Cash Out.
-        // CTE récursive : à chaque étape on suit le "porteur" courant de l'argent
-        // via un Send Money dont le montant reste proche du cash-in d'origine
-        // (tolérance %), jusqu'à ce qu'il sorte du système (W2B ou Cash Out) ou
-        // que la profondeur max soit atteinte. Les tables send/exit sont
-        // pré-filtrées une seule fois (CTE non récursives) pour que chaque étape
-        // de la récursion fasse un Hash Join, pas un scan corrélé.
-        $timeWindowCycleMinutes = $isSingleDay ? 120 : 720;
-        $timeWindowCycle = "INTERVAL '{$timeWindowCycleMinutes} minutes'";
-        $maxDepth = max(1, (int) $this->max_depth);
-        $finSendCycle = Carbon::parse($fin)->addMinutes($timeWindowCycleMinutes * $maxDepth)->format('Y-m-d H:i:s');
-        $finExitCycle = Carbon::parse($fin)->addMinutes($timeWindowCycleMinutes * ($maxDepth + 1))->format('Y-m-d H:i:s');
-
-        $this->cycling = DB::select("
-            WITH RECURSIVE cashin_base AS (
-                SELECT
-                    transaction_id,
-                    transaction_initiated_time::date AS txn_date,
-                    debit_party_identifier  AS agent,
-                    credit_party_identifier AS holder,
-                    actual_amount           AS origin_amount,
-                    transaction_initiated_time AS origin_time
-                FROM fact_txn_v2
-                WHERE transaction_initiated_time BETWEEN ? AND ?
-                  AND reason_index {$idxCashin}
-                  AND actual_amount > 0
-                LIMIT 500
-            ),
-            send_pool AS (
-                SELECT
-                    transaction_initiated_time,
-                    debit_party_identifier,
-                    credit_party_identifier,
-                    actual_amount
-                FROM fact_txn_v2
-                WHERE transaction_initiated_time BETWEEN ? AND ?
-                  AND reason_index {$idxSend}
-            ),
-            exit_pool AS (
-                SELECT
-                    transaction_initiated_time,
-                    debit_party_identifier,
-                    actual_amount
-                FROM fact_txn_v2
-                WHERE transaction_initiated_time BETWEEN ? AND ?
-                  AND (reason_index {$idxW2b} OR reason_index {$idxCashoutGeneral})
-            ),
-            chain AS (
-                SELECT
-                    cb.transaction_id            AS origin_id,
-                    cb.txn_date,
-                    cb.agent,
-                    cb.origin_amount,
-                    cb.origin_time,
-                    cb.holder AS current_holder,
-                    cb.origin_time AS current_time,
-                    0 AS depth
-                FROM cashin_base cb
-
-                UNION ALL
-
-                SELECT
-                    c.origin_id,
-                    c.txn_date,
-                    c.agent,
-                    c.origin_amount,
-                    c.origin_time,
-                    sp.credit_party_identifier AS current_holder,
-                    sp.transaction_initiated_time AS current_time,
-                    c.depth + 1
-                FROM chain c
-                JOIN send_pool sp
-                    ON sp.debit_party_identifier = c.current_holder
-                    AND sp.transaction_initiated_time > c.current_time
-                    AND sp.transaction_initiated_time < c.current_time + {$timeWindowCycle}
-                    AND ABS(sp.actual_amount - c.origin_amount) / c.origin_amount <= ?
-                WHERE c.depth < ?
-            ),
-            successful_exits AS (
-                SELECT DISTINCT ON (chain.origin_id)
-                    chain.origin_id,
-                    chain.txn_date,
-                    chain.agent,
-                    chain.origin_amount,
-                    chain.origin_time,
-                    chain.depth AS nb_hops,
-                    ep.transaction_initiated_time AS exit_time,
-                    ep.actual_amount AS exit_amount
-                FROM chain
-                JOIN exit_pool ep
-                    ON ep.debit_party_identifier = chain.current_holder
-                    AND ep.transaction_initiated_time > chain.current_time
-                    AND ep.transaction_initiated_time < chain.current_time + {$timeWindowCycle}
-                WHERE chain.depth >= 1
-                ORDER BY chain.origin_id, chain.depth ASC, ep.transaction_initiated_time ASC
-            )
-            SELECT
-                se.txn_date AS date,
-                se.agent,
-                COUNT(*) AS nb_cycles,
-                AVG(se.nb_hops) AS profondeur_moy,
-                MAX(se.nb_hops) AS profondeur_max,
-                AVG(se.origin_amount) AS montant_moyen,
-                SUM(se.origin_amount) AS total_cashin_fdj,
-                SUM(se.exit_amount) AS total_exit_fdj,
-                SUM(se.origin_amount) * 0.0256 AS commission_gagnee,
-                AVG(EXTRACT(EPOCH FROM (se.exit_time - se.origin_time)) / 60) AS avg_delay_min
-            FROM successful_exits se
-            GROUP BY se.txn_date, se.agent
-            HAVING COUNT(*) >= ?
-            ORDER BY nb_cycles DESC, commission_gagnee DESC
-            LIMIT 100
-        ", [
-            $debut,
-            $fin,
-            $debut,
-            $finSendCycle,
-            $debut,
-            $finExitCycle,
-            $this->amount_tolerance / 100,
-            $maxDepth,
-            $this->min_cycles,
-        ]);
-
-        // Conversion en minuscules
-        $toLower = fn($rows) => array_map(
-            fn($r) => array_change_key_case((array)$r, CASE_LOWER),
-            $rows
-        );
-
-        $this->repeat_mp     = $toLower($this->repeat_mp);
-        $this->repeat_cashin = $toLower($this->repeat_cashin);
-        $this->repeat_w2b    = $toLower($this->repeat_w2b);
-        $this->circulaires   = $toLower($this->circulaires);
-        $this->cycling       = $toLower($this->cycling);
-
-        $this->analyse = true;
-        $this->error_message = '';
-
-    } catch (\Exception $e) {
-        $this->analyse = false;
-        $this->loading = false;
-        $this->error_message = 'Erreur: ' . $e->getMessage();
-        \Log::error('Erreur analyse: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
-        session()->flash('error', 'Une erreur est survenue: ' . $e->getMessage());
+        $this->struct_detail = DB::table('agent_customer_daily_activity')
+            ->where('customer_id', $customerId)
+            ->whereBetween('activity_date', [$this->struct_date_debut, $this->struct_date_fin])
+            ->orderByDesc('cashin_amount')
+            ->get()
+            ->map(fn ($r) => (array) $r)
+            ->all();
     }
 
-    // Mettre en cache pour 1 heure
-    Cache::put($cacheKey, [
-        'repeat_mp' => $this->repeat_mp,
-        'repeat_cashin' => $this->repeat_cashin,
-        'repeat_w2b' => $this->repeat_w2b,
-        'circulaires' => $this->circulaires,
-        'cycling' => $this->cycling,
-    ], 3600);
+    /**
+     * Parcours complet d'une chaîne (S3) : ses transactions membres, dans l'ordre.
+     */
+    public function toggleChain(int $chainId): void
+    {
+        if ($this->chain_expanded_id === $chainId) {
+            $this->chain_expanded_id = null;
+            $this->chain_members     = [];
+            return;
+        }
 
+        $this->chain_expanded_id = $chainId;
 
-}
+        $this->chain_members = DB::table('transaction_chain_members')
+            ->where('chain_id', $chainId)
+            ->orderBy('sequence_number')
+            ->get()
+            ->map(fn ($r) => (array) $r)
+            ->all();
+    }
 
     public function with(): array
     {
-        return [];
+        return [
+            'processingStatus' => $this->getProcessingStatus(),
+            'commissionIndue'  => $this->getCommissionIndue(),
+            'structuring'      => $this->getStructuring(),
+            'chains'           => $this->getChains(),
+            'agentSummary'     => $this->getAgentSummary(),
+        ];
     }
-};
-?>
-<div>
+
+    /**
+     * Commission indue : couples agent/client avec des Cash In répétés sur la
+     * période, et la commission totale perçue par l'agent sur ces opérations.
+     * La commission étant un pourcentage du montant, répéter les cash-in sur
+     * le même argent (au lieu d'un seul mouvement réel) permet de refacturer
+     * la commission plusieurs fois — c'est ce signal qu'on cherche ici,
+     * indépendamment de la taille du ticket.
+     */
+    private function getCommissionIndue()
+    {
+        if (!$this->comm_searched) {
+            return null;
+        }
+
+        $debut = $this->comm_date_debut . ' 00:00:00';
+        $fin   = $this->comm_date_fin   . ' 23:59:59';
+
+        return DB::table('fraud_transactions')
+            ->select('debited_msisdn as agent_id', 'credited_msisdn as customer_id')
+            ->selectRaw('COUNT(*) as nb_cashin')
+            ->selectRaw('COALESCE(SUM(amount), 0) as total_amount')
+            ->selectRaw('COALESCE(SUM(commission), 0) as total_commission')
+            ->where('transaction_type', 'Customer Cash In')
+            ->whereBetween('transaction_time', [$debut, $fin])
+            ->groupBy('debited_msisdn', 'credited_msisdn')
+            ->havingRaw('COUNT(*) >= ?', [$this->comm_min_cashin])
+            ->orderByDesc('total_commission')
+            ->paginate(20, ['*'], 'commissionPage');
+    }
+
+    /**
+     * État des derniers traitements batch (fraud:process-daily écrit dans
+     * fraud_processing_runs ; fraud:chains-weekly n'y écrit rien, on déduit
+     * donc son dernier passage à partir de transaction_chains).
+     */
+    private function getProcessingStatus(): array
+    {
+        $runs = DB::table('fraud_processing_runs')
+            ->whereIn('process_name', ['agent_customer_daily_activity', 'customer_multi_agent_daily'])
+            ->orderByDesc('activity_date')
+            ->get()
+            ->groupBy('process_name')
+            ->map(fn ($group) => $group->first());
+
+        $chainsInfo = DB::table('transaction_chains')
+            ->selectRaw('MAX(activity_date) as last_activity_date, MAX(created_at) as last_run_at, COUNT(*) as total_chains')
+            ->first();
+
+        return [
+            's1' => $runs->get('agent_customer_daily_activity'),
+            's2' => $runs->get('customer_multi_agent_daily'),
+            's3' => $chainsInfo,
+        ];
+    }
+
+    private function getStructuring()
+    {
+        if (!$this->struct_searched) {
+            return null;
+        }
+
+        return DB::table('customer_multi_agent_daily')
+            ->whereBetween('activity_date', [$this->struct_date_debut, $this->struct_date_fin])
+            ->where('unique_agents', '>=', $this->struct_min_agents)
+            ->orderByDesc('unique_agents')
+            ->orderByDesc('total_cashin_amount')
+            ->paginate(20, ['*'], 'structPage');
+    }
+
+    private function getChains()
+    {
+        if (!$this->chain_searched) {
+            return null;
+        }
+
+        return DB::table('transaction_chains')
+            ->whereBetween('activity_date', [$this->chain_date_debut, $this->chain_date_fin])
+            ->orderByDesc('amount_retention_ratio')
+            ->orderByDesc('send_money_hops')
+            ->paginate(20, ['*'], 'chainPage');
+    }
+
+    /**
+     * Récapitulatif par agent d'origine : combien de fois cet agent apparaît
+     * comme point de départ d'une chaîne sur la période, et la commission
+     * totale qu'il a gagnée sur ces cash-in initiaux.
+     * Calculé sur l'ensemble de la période filtrée (pas seulement la page affichée).
+     */
+    private function getAgentSummary()
+    {
+        if (!$this->chain_searched) {
+            return null;
+        }
+
+        return DB::table('transaction_chains')
+            ->select('origin_agent_id')
+            ->selectRaw('COUNT(*) as nb_chains')
+            ->selectRaw('COALESCE(SUM(initial_commission), 0) as total_commission')
+            ->whereBetween('activity_date', [$this->chain_date_debut, $this->chain_date_fin])
+            ->groupBy('origin_agent_id')
+            ->orderByDesc('nb_chains')
+            ->get();
+    }
+
+    public function formatDuration(?int $seconds): string
+    {
+        if ($seconds === null) {
+            return '—';
+        }
+
+        $h = intdiv($seconds, 3600);
+        $m = intdiv($seconds % 3600, 60);
+        $s = $seconds % 60;
+
+        if ($h > 0) return sprintf('%dh%02dm', $h, $m);
+        if ($m > 0) return sprintf('%dm%02ds', $m, $s);
+        return "{$s}s";
+    }
+
+    public function riskLevel($ratio): string
+    {
+        $ratio = (float) $ratio;
+
+        if ($ratio >= 0.8) return 'high';
+        if ($ratio >= 0.5) return 'medium';
+        return 'low';
+    }
+}; ?>
+
 <div style="padding:24px;">
 
-    {{-- FILTRES --}}
-    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:20px; margin-bottom:20px;">
+    <div style="margin-bottom:20px;">
+        <h2 style="font-size:16px; font-weight:700; color:#111827; margin:0 0 4px;">AML — Détection de blanchiment</h2>
+        <p style="font-size:12px; color:#9ca3af; margin:0;">Structuring (cash-in multi-agents) et reconstitution des chaînes de transactions.</p>
+    </div>
 
-        <p style="font-size:14px; font-weight:700; color:#111827; margin-bottom:16px;">
-            Paramètres d'analyse
-        </p>
+    {{-- SECTION COMMISSION INDUE (CASH IN RÉPÉTÉS) --}}
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px; margin-bottom:20px;">
+        <p style="font-size:13px; font-weight:700; color:#111827; margin:0 0 4px;">Commission indue — Cash In répétés entre un agent et un client</p>
+        <p style="font-size:11px; color:#9ca3af; margin:0 0 16px;">La commission étant un pourcentage du montant, refaire circuler le même argent en plusieurs Cash In permet de la refacturer plusieurs fois.</p>
 
-        @if(session()->has('error'))
-            <div style="background:#FDECEA; border-left:3px solid #E24B4A; padding:12px 16px; border-radius:6px; margin-bottom:16px;">
-                <p style="font-size:12px; color:#7F1D1D; margin:0;">{{ session('error') }}</p>
-            </div>
-        @endif
-
-        @if(session()->has('warning'))
-            <div style="background:#FFF3D0; border-left:3px solid #F5A800; padding:12px 16px; border-radius:6px; margin-bottom:16px;">
-                <p style="font-size:12px; color:#7A4F00; margin:0;">{{ session('warning') }}</p>
-            </div>
-        @endif
-
-        <div style="display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; margin-bottom:16px;">
+        <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom:16px;">
             <div>
                 <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date début</label>
-                <input type="date" wire:model="date_debut"
-                       min="{{ Carbon::now()->subDays(30)->format('Y-m-d') }}"
-                       max="{{ Carbon::now()->format('Y-m-d') }}"
-                       style="width:100%; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
+                <input type="date" wire:model="comm_date_debut"
+                       style="border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
             </div>
             <div>
                 <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date fin</label>
-                <input type="date" wire:model="date_fin"
-                       min="{{ Carbon::now()->subDays(30)->format('Y-m-d') }}"
-                       max="{{ Carbon::now()->format('Y-m-d') }}"
-                       style="width:100%; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
+                <input type="date" wire:model="comm_date_fin"
+                       style="border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
             </div>
             <div>
-                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Cycles min (cycling)</label>
-                <input type="number" wire:model="min_cycles" min="2" max="20"
-                       style="width:100%; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
+                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Nb cash-in min.</label>
+                <input type="number" min="2" wire:model="comm_min_cashin"
+                       style="width:100px; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
             </div>
-            <div>
-                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Tolérance montant (%)</label>
-                <input type="number" wire:model="amount_tolerance" min="0" max="10"
-                       style="width:100%; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
-            </div>
-            <div>
-                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Profondeur max Send Money</label>
-                <input type="number" wire:model="max_depth" min="1" max="20"
-                       style="width:100%; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
-            </div>
+            <button wire:click="analyserCommission" wire:loading.attr="disabled" wire:target="analyserCommission"
+                    style="background:#00843D; color:#fff; font-size:13px; font-weight:600; padding:9px 22px; border-radius:8px; border:none; cursor:pointer;">
+                Analyser
+            </button>
         </div>
 
-        <div style="display:flex; gap:12px; align-items:center;">
-            <button onclick="lancerAnalyse()"
-                    style="background:#1B2F6E; color:#fff; font-size:13px; font-weight:600; padding:10px 24px; border-radius:8px; border:none; cursor:pointer; display:flex; align-items:center; gap:8px;">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="white">
-                    <path d="M8 2L1 14h14L8 2zm0 5v4"/><circle cx="8" cy="12" r="0.8"/>
-                </svg>
-                Lancer l'analyse
-            </button>
+        @if($comm_searched)
+            @if($commissionIndue->isEmpty())
+                <p style="font-size:12px; color:#9ca3af; text-align:center; padding:24px;">Aucun couple agent/client au-dessus du seuil sur cette période.</p>
+            @else
+                <div style="overflow-x:auto;">
+                    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead>
+                            <tr style="background:#F7F8FC;">
+                                <th style="padding:10px 16px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Agent</th>
+                                <th style="padding:10px 16px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Client</th>
+                                <th style="padding:10px 16px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Nb cash-in</th>
+                                <th style="padding:10px 16px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Montant total</th>
+                                <th style="padding:10px 16px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Commission totale</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach($commissionIndue as $row)
+                                <tr style="border-bottom:1px solid #f3f4f6;"
+                                    onmouseover="this.style.background='#F7F8FC'"
+                                    onmouseout="this.style.background='transparent'">
+                                    <td style="padding:10px 16px; color:#111827; font-weight:500;">{{ $row->agent_id }}</td>
+                                    <td style="padding:10px 16px; color:#6b7280;">{{ $row->customer_id }}</td>
+                                    <td style="padding:10px 16px; text-align:center;">
+                                        <span style="background:#FEF3C7; color:#92400E; font-size:11px; font-weight:700; padding:2px 10px; border-radius:20px;">
+                                            {{ $row->nb_cashin }}
+                                        </span>
+                                    </td>
+                                    <td style="padding:10px 16px; text-align:right; color:#6b7280;">{{ number_format($row->total_amount * 100, 0, ',', ' ') }}</td>
+                                    <td style="padding:10px 16px; text-align:right; color:#111827; font-weight:600;">{{ number_format($row->total_commission * 100, 0, ',', ' ') }}</td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+                <div style="padding:12px 0 0;">
+                    {{ $commissionIndue->links() }}
+                </div>
+            @endif
+        @endif
+    </div>
 
-            @if(session()->has('error'))
-                <span style="font-size:12px; color:#E24B4A;">{{ session('error') }}</span>
+    {{-- ÉTAT DES TRAITEMENTS --}}
+    <div style="display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; margin-bottom:20px;">
+        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px 16px;">
+            <p style="font-size:10px; color:#9ca3af; margin:0 0 4px; text-transform:uppercase; letter-spacing:0.5px;">S1 — Agent → Client (quotidien)</p>
+            @if($processingStatus['s1'])
+                <p style="font-size:12px; color:#111827; margin:0;">
+                    {{ \Carbon\Carbon::parse($processingStatus['s1']->activity_date)->format('d/m/Y') }}
+                    <span style="background:{{ $processingStatus['s1']->status === 'SUCCESS' ? '#E5F5ED' : ($processingStatus['s1']->status === 'FAILED' ? '#FDE8E8' : '#FEF3C7') }};
+                                 color:{{ $processingStatus['s1']->status === 'SUCCESS' ? '#005C2B' : ($processingStatus['s1']->status === 'FAILED' ? '#7F1D1D' : '#92400E') }};
+                                 font-size:10px; font-weight:600; padding:2px 8px; border-radius:20px; margin-left:6px;">
+                        {{ $processingStatus['s1']->status }}
+                    </span>
+                </p>
+                <p style="font-size:11px; color:#9ca3af; margin:4px 0 0;">{{ number_format($processingStatus['s1']->rows_processed, 0, ',', ' ') }} lignes</p>
+            @else
+                <p style="font-size:12px; color:#9ca3af; margin:0;">Aucune exécution enregistrée.</p>
+            @endif
+        </div>
+
+        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px 16px;">
+            <p style="font-size:10px; color:#9ca3af; margin:0 0 4px; text-transform:uppercase; letter-spacing:0.5px;">S2 — Client multi-agents (quotidien)</p>
+            @if($processingStatus['s2'])
+                <p style="font-size:12px; color:#111827; margin:0;">
+                    {{ \Carbon\Carbon::parse($processingStatus['s2']->activity_date)->format('d/m/Y') }}
+                    <span style="background:{{ $processingStatus['s2']->status === 'SUCCESS' ? '#E5F5ED' : ($processingStatus['s2']->status === 'FAILED' ? '#FDE8E8' : '#FEF3C7') }};
+                                 color:{{ $processingStatus['s2']->status === 'SUCCESS' ? '#005C2B' : ($processingStatus['s2']->status === 'FAILED' ? '#7F1D1D' : '#92400E') }};
+                                 font-size:10px; font-weight:600; padding:2px 8px; border-radius:20px; margin-left:6px;">
+                        {{ $processingStatus['s2']->status }}
+                    </span>
+                </p>
+                <p style="font-size:11px; color:#9ca3af; margin:4px 0 0;">{{ number_format($processingStatus['s2']->rows_processed, 0, ',', ' ') }} lignes</p>
+            @else
+                <p style="font-size:12px; color:#9ca3af; margin:0;">Aucune exécution enregistrée.</p>
+            @endif
+        </div>
+
+        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px 16px;">
+            <p style="font-size:10px; color:#9ca3af; margin:0 0 4px; text-transform:uppercase; letter-spacing:0.5px;">S3 — Chaînes (hebdomadaire)</p>
+            @if($processingStatus['s3'] && $processingStatus['s3']->last_run_at)
+                <p style="font-size:12px; color:#111827; margin:0;">
+                    Semaine du {{ \Carbon\Carbon::parse($processingStatus['s3']->last_activity_date)->format('d/m/Y') }}
+                </p>
+                <p style="font-size:11px; color:#9ca3af; margin:4px 0 0;">
+                    {{ number_format($processingStatus['s3']->total_chains, 0, ',', ' ') }} chaînes au total — calculées le {{ \Carbon\Carbon::parse($processingStatus['s3']->last_run_at)->format('d/m/Y H:i') }}
+                </p>
+            @else
+                <p style="font-size:12px; color:#9ca3af; margin:0;">Aucune chaîne calculée.</p>
             @endif
         </div>
     </div>
 
-    @if($analyse)
+    {{-- SECTION STRUCTURING --}}
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px; margin-bottom:20px;">
+        <p style="font-size:13px; font-weight:700; color:#111827; margin:0 0 4px;">Structuring — clients alimentés par plusieurs agents</p>
+        <p style="font-size:11px; color:#9ca3af; margin:0 0 16px;">Basé sur les cash-in quotidiens agrégés par client et par agent.</p>
 
-        {{-- KPIs GLOBAUX --}}
-        <div style="display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:10px; margin-bottom:20px;">
-            @php
-                $kpis = [
-                    ['label' => 'MP répétitifs',     'val' => count($repeat_mp),     'color' => '#F5A800'],
-                    ['label' => 'Cash In répétitifs','val' => count($repeat_cashin), 'color' => '#1B2F6E'],
-                    ['label' => 'Circuits Cash In→MP→Cash Out', 'val' => count($circulaires), 'color' => '#9333ea'],
-                    ['label' => 'Cycling agents',    'val' => count($cycling),       'color' => '#E24B4A'],
-                ];
-            @endphp
-            @foreach($kpis as $kpi)
-                <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px; border-top:3px solid {{ $kpi['color'] }};">
-                    <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">{{ $kpi['label'] }}</p>
-                    <p style="font-size:24px; font-weight:700; color:#111827; margin:0;">{{ $kpi['val'] }}</p>
-                </div>
-            @endforeach
+        <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom:16px;">
+            <div>
+                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date début</label>
+                <input type="date" wire:model="struct_date_debut"
+                       style="border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
+            </div>
+            <div>
+                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date fin</label>
+                <input type="date" wire:model="struct_date_fin"
+                       style="border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
+            </div>
+            <div>
+                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Nb agents min.</label>
+                <input type="number" min="2" wire:model="struct_min_agents"
+                       style="width:100px; border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
+            </div>
+            <button wire:click="analyserStructuring" wire:loading.attr="disabled" wire:target="analyserStructuring"
+                    style="background:#00843D; color:#fff; font-size:13px; font-weight:600; padding:9px 22px; border-radius:8px; border:none; cursor:pointer;">
+                Analyser
+            </button>
         </div>
 
-        {{-- 1 & 2. MP RÉPÉTITIFS + CASH IN RÉPÉTITIFS --}}
-        <div style="display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:16px; margin-bottom:16px;">
-
-            {{-- MP RÉPÉTITIFS --}}
-            <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden;">
-                <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; gap:8px;">
-                    <span style="width:8px; height:8px; border-radius:50%; background:#F5A800; display:inline-block;"></span>
-                    <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">Paiements marchands répétitifs</p>
-                    <span style="margin-left:auto; background:#FFF3D0; color:#7A4F00; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">{{ count($repeat_mp) }} cas</span>
-                </div>
-
-                @if(empty($repeat_mp))
-                    <p style="padding:20px; font-size:12px; color:#9ca3af;">Aucun résultat.</p>
-                @else
-                    <div style="overflow-x:auto; overflow-y:auto; max-height:220px;">
-                        <table style="width:100%; border-collapse:collapse; font-size:11px;">
-                            <thead>
-                                <tr style="background:#F7F8FC;">
-                                    <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">#</th>
-                                    <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Débit MSISDN</th>
-                                    <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Crédit MSISDN</th>
-                                    <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Nb</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                @foreach($repeat_mp as $i => $row)
-                                    <tr style="border-bottom:1px solid #f3f4f6;"
-                                        onmouseover="this.style.background='#F7F8FC'"
-                                        onmouseout="this.style.background='transparent'">
-                                        <td style="padding:8px 12px; color:#9ca3af;">{{ $i + 1 }}</td>
-                                        <td style="padding:8px 12px; color:#374151; white-space:nowrap;">{{ $row['debit_party_identifier'] }}</td>
-                                        <td style="padding:8px 12px; color:#374151; white-space:nowrap;">{{ $row['credit_party_identifier'] }}</td>
-                                        <td style="padding:8px 12px;">
-                                            <span style="background:#FFF3D0; color:#7A4F00; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">
-                                                {{ $row['nb_paiements'] }}
-                                            </span>
-                                        </td>
-                                    </tr>
-                                @endforeach
-                            </tbody>
-                        </table>
-                    </div>
-
-                    @if(count($repeat_mp) > 5)
-                        <div style="padding:8px 16px; border-top:1px solid #e5e7eb; background:#FAFAFA;">
-                            <p style="font-size:10px; color:#9ca3af; margin:0;">
-                                Affichage de {{ count($repeat_mp) }} résultats — faites défiler pour voir tout
-                            </p>
-                        </div>
-                    @endif
-                @endif
-            </div>
-
-            {{-- CASH IN RÉPÉTITIFS --}}
-            <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden;">
-                <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; gap:8px;">
-                    <span style="width:8px; height:8px; border-radius:50%; background:#1B2F6E; display:inline-block;"></span>
-                    <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">Cash In répétitifs</p>
-                    <span style="margin-left:auto; background:#E8ECF8; color:#1B2F6E; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">{{ count($repeat_cashin) }} cas</span>
-                </div>
-
-                @if(empty($repeat_cashin))
-                    <p style="padding:20px; font-size:12px; color:#9ca3af;">Aucun résultat.</p>
-                @else
-                    <div style="overflow-x:auto; overflow-y:auto; max-height:220px;">
-                        <table style="width:100%; border-collapse:collapse; font-size:11px;">
-                            <thead>
-                                <tr style="background:#F7F8FC;">
-                                    <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">#</th>
-                                    <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Débit MSISDN</th>
-                                    <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Crédit MSISDN</th>
-                                    <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap; position:sticky; top:0; background:#F7F8FC; z-index:1;">Nb</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                @foreach($repeat_cashin as $i => $row)
-                                    <tr style="border-bottom:1px solid #f3f4f6;"
-                                        onmouseover="this.style.background='#F7F8FC'"
-                                        onmouseout="this.style.background='transparent'">
-                                        <td style="padding:8px 12px; color:#9ca3af;">{{ $i + 1 }}</td>
-                                        <td style="padding:8px 12px; color:#374151; white-space:nowrap;">{{ $row['debit_party_identifier'] }}</td>
-                                        <td style="padding:8px 12px; color:#374151; white-space:nowrap;">{{ $row['credit_party_identifier'] }}</td>
-                                        <td style="padding:8px 12px;">
-                                            <span style="background:#E8ECF8; color:#1B2F6E; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">
-                                                {{ $row['nb_cashin'] }}
-                                            </span>
-                                        </td>
-                                    </tr>
-                                @endforeach
-                            </tbody>
-                        </table>
-                    </div>
-
-                    @if(count($repeat_cashin) > 5)
-                        <div style="padding:8px 16px; border-top:1px solid #e5e7eb; background:#FAFAFA;">
-                            <p style="font-size:10px; color:#9ca3af; margin:0;">
-                                Affichage de {{ count($repeat_cashin) }} résultats — faites défiler pour voir tout
-                            </p>
-                        </div>
-                    @endif
-                @endif
-            </div>
-
-        </div>
-
-        {{-- 3. CIRCUITS : Customer Cash In → Merchant Payment → Business Cash Out --}}
-        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; margin-bottom:16px;">
-            <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; gap:8px;">
-                <span style="width:8px; height:8px; border-radius:50%; background:#9333ea; display:inline-block;"></span>
-                <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">Cash In → Merchant Payment → Business Cash Out</p>
-                <span style="margin-left:auto; background:#F3E8FF; color:#6B21A8; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">{{ count($circulaires) }} cas</span>
-            </div>
-            @if(empty($circulaires))
-                <p style="padding:20px; font-size:12px; color:#9ca3af;">Aucun circuit Cash In → Merchant Payment → Business Cash Out détecté.</p>
+        @if($struct_searched)
+            @if($structuring->isEmpty())
+                <p style="font-size:12px; color:#9ca3af; text-align:center; padding:24px;">Aucun client au-dessus du seuil sur cette période.</p>
             @else
                 <div style="overflow-x:auto;">
-                    <table style="width:100%; border-collapse:collapse; font-size:11px;">
-                        <thead><tr style="background:#F7F8FC;">
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Date</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Cash In (de)</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Client</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Marchand</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Montant</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Business Cash Out (vers)</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Délai</th>
-                            <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Flags</th>
-                        </tr></thead>
-                        <tbody>
-                            @foreach($circulaires as $row)
-                                <tr style="border-bottom:1px solid #f3f4f6;"
-                                    onmouseover="this.style.background='#F7F8FC'"
-                                    onmouseout="this.style.background='transparent'">
-                                    <td style="padding:8px 12px; color:#6b7280;">{{ $row['date'] }}</td>
-                                    <td style="padding:8px 12px; color:#374151;">{{ $row['cashin_from'] }}</td>
-                                    <td style="padding:8px 12px; font-weight:600; color:#111827;">{{ $row['client'] }}</td>
-                                    <td style="padding:8px 12px; color:#374151;">{{ $row['merchant'] }}</td>
-                                    <td style="padding:8px 12px; color:#374151;">{{ number_format($row['amount'], 0, ',', ' ') }} FDJ</td>
-                                    <td style="padding:8px 12px; color:#374151;">{{ $row['cashout_to'] }}</td>
-                                    <td style="padding:8px 12px;">
-                                        @php $delay = round($row['delay_minutes']); @endphp
-                                        <span style="background:{{ $delay < 10 ? '#FDECEA' : ($delay < 30 ? '#FFF3D0' : '#E5F5ED') }};
-                                                    color:{{ $delay < 10 ? '#7F1D1D' : ($delay < 30 ? '#7A4F00' : '#005C2B') }};
-                                                    font-size:10px; font-weight:700; padding:2px 8px; border-radius:12px;">
-                                            {{ $delay }} min
-                                        </span>
-                                    </td>
-                                    <td style="padding:8px 12px; color:#6b7280; font-size:10px;">{{ $row['flags'] }}</td>
-                                </tr>
-                            @endforeach
-                        </tbody>
-                    </table>
-                </div>
-            @endif
-        </div>
-
-        {{-- 4. CYCLING DE COMMISSION : Cash In → Send Money (n fois) → W2B ou Cash Out --}}
-        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; margin-bottom:16px;">
-            <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; gap:8px;">
-                <span style="width:8px; height:8px; border-radius:50%; background:#E24B4A; display:inline-block;"></span>
-                <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">Cash In → Send Money (n fois) → W2B / Cash Out</p>
-                <span style="margin-left:auto; background:#FDECEA; color:#7F1D1D; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">{{ count($cycling) }} agents</span>
-            </div>
-
-            @if(empty($cycling))
-                <p style="padding:20px; font-size:12px; color:#9ca3af;">Aucun agent suspect détecté.</p>
-            @else
-                @php
-                    $totalCycles     = array_sum(array_column($cycling, 'nb_cycles'));
-                    $totalCommission = array_sum(array_column($cycling, 'commission_gagnee'));
-                    $totalVolume     = array_sum(array_column($cycling, 'total_cashin_fdj'));
-                @endphp
-
-                <div style="display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:0; border-bottom:1px solid #e5e7eb;">
-                    @foreach([
-                        ['label' => 'Agents alertés',    'val' => count($cycling)],
-                        ['label' => 'Total cycles',       'val' => $totalCycles],
-                        ['label' => 'Volume Cash In total', 'val' => number_format($totalVolume, 0, ',', ' ') . ' FDJ'],
-                        ['label' => 'Commission totale',  'val' => number_format($totalCommission, 0, ',', ' ') . ' FDJ'],
-                    ] as $kpi)
-                        <div style="padding:14px 16px; border-right:1px solid #e5e7eb;">
-                            <p style="font-size:10px; color:#6b7280; margin:0 0 4px;">{{ $kpi['label'] }}</p>
-                            <p style="font-size:18px; font-weight:700; color:#111827; margin:0;">{{ $kpi['val'] }}</p>
-                        </div>
-                    @endforeach
-                </div>
-
-                <div style="overflow-x:auto;">
-                    <table style="width:100%; border-collapse:collapse; font-size:11px;">
+                    <table style="width:100%; border-collapse:collapse; font-size:12px;">
                         <thead>
                             <tr style="background:#F7F8FC;">
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Date</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Agent</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Cycles</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Profondeur (moy/max)</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Montant moyen</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Total Cash In</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Total sorti (W2B/Cash Out)</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Commission</th>
-                                <th style="padding:8px 12px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Délai moy.</th>
+                                <th style="padding:10px 16px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;"></th>
+                                <th style="padding:10px 16px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Date</th>
+                                <th style="padding:10px 16px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Client</th>
+                                <th style="padding:10px 16px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Agents distincts</th>
+                                <th style="padding:10px 16px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Nb cash-in</th>
+                                <th style="padding:10px 16px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Montant total</th>
                             </tr>
                         </thead>
                         <tbody>
-                            @foreach($cycling as $row)
-                                <tr style="border-bottom:1px solid #f3f4f6;"
+                            @foreach($structuring as $row)
+                                <tr style="border-bottom:1px solid #f3f4f6; cursor:pointer;"
+                                    wire:click="toggleStructCustomer('{{ $row->customer_id }}')"
                                     onmouseover="this.style.background='#F7F8FC'"
                                     onmouseout="this.style.background='transparent'">
-                                    <td style="padding:8px 12px; color:#6b7280;">{{ $row['date'] }}</td>
-                                    <td style="padding:8px 12px; font-weight:600; color:#111827;">{{ $row['agent'] }}</td>
-                                    <td style="padding:8px 12px;">
-                                        <span style="background:#FDECEA; color:#7F1D1D; font-size:10px; font-weight:700; padding:2px 8px; border-radius:12px;">
-                                            {{ $row['nb_cycles'] }}
+                                    <td style="padding:10px 16px; color:#9ca3af; width:20px;">
+                                        {{ $struct_expanded_customer === $row->customer_id ? '▾' : '▸' }}
+                                    </td>
+                                    <td style="padding:10px 16px; color:#6b7280;">{{ \Carbon\Carbon::parse($row->activity_date)->format('d/m/Y') }}</td>
+                                    <td style="padding:10px 16px; color:#111827; font-weight:500;">{{ $row->customer_id }}</td>
+                                    <td style="padding:10px 16px; text-align:center;">
+                                        <span style="background:{{ $row->unique_agents >= 5 ? '#FDE8E8' : '#FEF3C7' }}; color:{{ $row->unique_agents >= 5 ? '#7F1D1D' : '#92400E' }}; font-size:11px; font-weight:700; padding:2px 10px; border-radius:20px;">
+                                            {{ $row->unique_agents }}
                                         </span>
                                     </td>
-                                    <td style="padding:8px 12px; color:#374151;">
-                                        {{ round($row['profondeur_moy'], 1) }} / {{ $row['profondeur_max'] }} hops
-                                    </td>
-                                    <td style="padding:8px 12px; color:#374151;">
-                                        {{ number_format($row['montant_moyen'], 0, ',', ' ') }} FDJ
-                                    </td>
-                                    <td style="padding:8px 12px; color:#374151;">
-                                        {{ number_format($row['total_cashin_fdj'], 0, ',', ' ') }} FDJ
-                                    </td>
-                                    <td style="padding:8px 12px; color:#374151;">
-                                        {{ number_format($row['total_exit_fdj'], 0, ',', ' ') }} FDJ
-                                    </td>
-                                    <td style="padding:8px 12px; color:#374151;">
-                                        {{ number_format($row['commission_gagnee'], 0, ',', ' ') }} FDJ
-                                    </td>
-                                    <td style="padding:8px 12px; color:#374151;">
-                                        {{ round($row['avg_delay_min'], 1) }} min
-                                    </td>
+                                    <td style="padding:10px 16px; text-align:center; color:#6b7280;">{{ number_format($row->total_cashin_count, 0, ',', ' ') }}</td>
+                                    <td style="padding:10px 16px; text-align:right; color:#111827;">{{ number_format($row->total_cashin_amount*100, 0, ',', ' ') }}</td>
                                 </tr>
+
+                                @if($struct_expanded_customer === $row->customer_id)
+                                    <tr>
+                                        <td colspan="6" style="padding:0; background:#FAFBFC;">
+                                            <div style="padding:14px 16px 14px 46px;">
+                                                <p style="font-size:11px; font-weight:600; color:#6b7280; margin:0 0 8px;">Détail par agent</p>
+                                                @forelse($struct_detail as $d)
+                                                    <div style="display:flex; align-items:center; justify-content:space-between; padding:6px 0; font-size:12px; border-bottom:1px solid #eef0f3;">
+                                                        <span style="color:#111827;">{{ $d['agent_id'] }}</span>
+                                                        <span style="color:#6b7280;">{{ \Carbon\Carbon::parse($d['activity_date'])->format('d/m/Y') }}</span>
+                                                        <span style="color:#6b7280;">{{ number_format($d['cashin_count'], 0, ',', ' ') }} opérations</span>
+                                                        <span style="color:#111827; font-weight:500;">{{ number_format($d['cashin_amount']*100, 0, ',', ' ') }}</span>
+                                                    </div>
+                                                @empty
+                                                    <p style="font-size:12px; color:#9ca3af;">Aucun détail.</p>
+                                                @endforelse
+                                            </div>
+                                        </td>
+                                    </tr>
+                                @endif
                             @endforeach
                         </tbody>
                     </table>
                 </div>
+                <div style="padding:12px 0 0;">
+                    {{ $structuring->links() }}
+                </div>
             @endif
+        @endif
+    </div>
+
+    {{-- SECTION CHAÎNES DE TRANSACTIONS --}}
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px;">
+        <p style="font-size:13px; font-weight:700; color:#111827; margin:0 0 4px;">Chaînes de transactions — Cash In → Send Money → Cash Out/W2B</p>
+        <p style="font-size:11px; color:#9ca3af; margin:0 0 16px;">Le ratio de rétention proche de 100% combiné à une durée courte est un signal de risque élevé.</p>
+
+        <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom:16px;">
+            <div>
+                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date début</label>
+                <input type="date" wire:model="chain_date_debut"
+                       style="border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
+            </div>
+            <div>
+                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date fin</label>
+                <input type="date" wire:model="chain_date_fin"
+                       style="border:1px solid #d1d5db; border-radius:7px; padding:8px 10px; font-size:13px; color:#111827; outline:none;">
+            </div>
+            <button wire:click="analyserChains" wire:loading.attr="disabled" wire:target="analyserChains"
+                    style="background:#00843D; color:#fff; font-size:13px; font-weight:600; padding:9px 22px; border-radius:8px; border:none; cursor:pointer;">
+                Analyser
+            </button>
         </div>
 
-    @endif
-
-    <script>
-        function lancerAnalyse() {
-            if (typeof Swal === 'undefined') {
-                alert('SweetAlert2 non chargé — vérifie le layout.');
-                return;
-            }
-
-            // Récupérer les dates
-            const dateDebut = document.querySelector('[wire\\:model="date_debut"]')?.value || '';
-            const dateFin = document.querySelector('[wire\\:model="date_fin"]')?.value || '';
-            
-            // Vérifier si la période est d'un seul jour
-            if (dateDebut && dateFin && dateDebut === dateFin) {
-                Swal.fire({
-                    title: '⚠️ Période courte',
-                    text: 'L\'analyse sur une seule journée peut donner des résultats limités. Les scénarios de fraude sont souvent détectés sur plusieurs jours.',
-                    icon: 'warning',
-                    showCancelButton: true,
-                    confirmButtonColor: '#1B2F6E',
-                    cancelButtonColor: '#E24B4A',
-                    confirmButtonText: 'Continuer quand même',
-                    cancelButtonText: 'Annuler',
-                }).then((result) => {
-                    if (result.isConfirmed) {
-                        lancerAnalyseReelle();
-                    }
-                });
-            } else {
-                lancerAnalyseReelle();
-            }
-        }
-
-        function lancerAnalyseReelle() {
-            Swal.fire({
-                title: 'Analyse en cours...',
-                html: `
-                    <div style="font-size:13px; color:#6b7280; margin-bottom:16px;">
-                        Détection des scénarios de fraude sur la période sélectionnée.
+        @if($chain_searched)
+            @if($chains->isEmpty())
+                <p style="font-size:12px; color:#9ca3af; text-align:center; padding:24px;">Aucune chaîne détectée sur cette période.</p>
+            @else
+                {{-- RÉCAPITULATIF PAR AGENT D'ORIGINE --}}
+                <div style="margin-bottom:20px;">
+                    <p style="font-size:12px; font-weight:600; color:#111827; margin:0 0 10px;">Récapitulatif par agent d'origine</p>
+                    <div style="overflow-x:auto; border:1px solid #e5e7eb; border-radius:8px;">
+                        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                            <thead>
+                                <tr style="background:#F7F8FC;">
+                                    <th style="padding:8px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Agent</th>
+                                    <th style="padding:8px 14px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Nb chaînes</th>
+                                    <th style="padding:8px 14px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Commission totale</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @forelse($agentSummary as $agent)
+                                    <tr style="border-bottom:1px solid #f3f4f6;">
+                                        <td style="padding:8px 14px; color:#111827; font-weight:500;">{{ $agent->origin_agent_id }}</td>
+                                        <td style="padding:8px 14px; text-align:center; color:#6b7280;">{{ number_format($agent->nb_chains, 0, ',', ' ') }}</td>
+                                        <td style="padding:8px 14px; text-align:right; color:#111827;">{{ number_format($agent->total_commission, 0, ',', ' ') }}</td>
+                                    </tr>
+                                @empty
+                                    <tr>
+                                        <td colspan="3" style="padding:16px; text-align:center; color:#9ca3af;">Aucun agent sur cette période.</td>
+                                    </tr>
+                                @endforelse
+                            </tbody>
+                        </table>
                     </div>
-                    <div style="width:100%; height:6px; background:#e5e7eb; border-radius:10px; overflow:hidden; margin-bottom:8px;">
-                        <div id="fraude-fill" style="height:100%; width:0%; background:#1B2F6E; border-radius:10px; transition:width 0.4s ease;"></div>
-                    </div>
-                    <div id="fraude-msg" style="font-size:11px; color:#9ca3af;">Initialisation...</div>
-                `,
-                allowOutsideClick: false,
-                showConfirmButton: false,
-                didOpen: () => {
-                    const messages = [
-                        'Chargement des transactions...',
-                        'Classification par type...',
-                        'Détection MP répétitifs...',
-                        'Analyse Cash In → W2B...',
-                        'Analyse B2W → Send → W2B...',
-                        'Scénarios circulaires...',
-                        'Cycling de commission...',
-                        'Calcul des scores de risque...',
-                        'Finalisation...',
-                    ];
+                </div>
 
-                    let progress = 0;
-                    let msgIndex = 0;
+                <div style="overflow-x:auto;">
+                    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead>
+                            <tr style="background:#F7F8FC;">
+                                <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;"></th>
+                                <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Date</th>
+                                <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Agent origine</th>
+                                <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Client origine</th>
+                                <th style="padding:10px 14px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Montant initial</th>
+                                <th style="padding:10px 14px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Montant final</th>
+                                <th style="padding:10px 14px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Poids de la Chaine</th>
+                                <th style="padding:10px 14px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Durée</th>
+                                <th style="padding:10px 14px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Rétention</th>
+                                <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Sortie</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach($chains as $chain)
+                                @php $risk = $this->riskLevel($chain->amount_retention_ratio); @endphp
+                                <tr style="border-bottom:1px solid #f3f4f6; cursor:pointer;
+                                           {{ $risk === 'high' ? 'background:#FEF7F7;' : '' }}"
+                                    wire:click="toggleChain({{ $chain->chain_id }})"
+                                    onmouseover="this.style.background='#F7F8FC'"
+                                    onmouseout="this.style.background='{{ $risk === 'high' ? '#FEF7F7' : 'transparent' }}'">
+                                    <td style="padding:10px 14px; color:#9ca3af;">
+                                        {{ $chain_expanded_id === $chain->chain_id ? '▾' : '▸' }}
+                                    </td>
+                                    <td style="padding:10px 14px; color:#6b7280;">{{ \Carbon\Carbon::parse($chain->activity_date)->format('d/m/Y') }}</td>
+                                    <td style="padding:10px 14px; color:#111827;">{{ $chain->origin_agent_id }}</td>
+                                    <td style="padding:10px 14px; color:#111827;">{{ $chain->origin_customer_id }}</td>
+                                    <td style="padding:10px 14px; text-align:right; color:#6b7280;">{{ number_format($chain->initial_amount*100, 0, ',', ' ') }}</td>
+                                    <td style="padding:10px 14px; text-align:right; color:#111827; font-weight:500;">{{ number_format($chain->final_amount*100, 0, ',', ' ') }}</td>
+                                    <td style="padding:10px 14px; text-align:center; color:#6b7280;">{{ $chain->send_money_hops }}</td>
+                                    <td style="padding:10px 14px; text-align:center; color:#6b7280;">{{ $this->formatDuration($chain->duration_seconds) }}</td>
+                                    <td style="padding:10px 14px; text-align:center;">
+                                        <span style="background:{{ $risk === 'high' ? '#FDE8E8' : ($risk === 'medium' ? '#FEF3C7' : '#E5F5ED') }};
+                                                     color:{{ $risk === 'high' ? '#7F1D1D' : ($risk === 'medium' ? '#92400E' : '#005C2B') }};
+                                                     font-size:11px; font-weight:700; padding:2px 10px; border-radius:20px;">
+                                            {{ number_format(((float) $chain->amount_retention_ratio), 0) }}%
+                                        </span>
+                                    </td>
+                                    <td style="padding:10px 14px; color:#6b7280;">{{ $chain->final_transaction_type }}</td>
+                                </tr>
 
-                    const getFill = () => document.getElementById('fraude-fill');
-                    const getMsg  = () => document.getElementById('fraude-msg');
-
-                    const interval = setInterval(() => {
-                        progress += (92 - progress) * 0.06;
-                        msgIndex = Math.min(
-                            Math.floor((progress / 92) * messages.length),
-                            messages.length - 1
-                        );
-                        if (getFill()) getFill().style.width = progress.toFixed(1) + '%';
-                        if (getMsg())  getMsg().textContent  = messages[msgIndex];
-                    }, 300);
-
-                    const component = Livewire.find(
-                        document.querySelector('[wire\\:id]').getAttribute('wire:id')
-                    );
-
-                    component.call('lancer')
-                        .then(() => {
-                            clearInterval(interval);
-
-                            if (getFill()) {
-                                getFill().style.width = '100%';
-                                getFill().style.background = '#16a34a';
-                            }
-                            if (getMsg()) getMsg().textContent = 'Analyse terminée !';
-
-                            setTimeout(() => {
-                                Swal.fire({
-                                    title:             'Analyse terminée !',
-                                    icon:              'success',
-                                    confirmButtonText: 'Voir les résultats',
-                                    confirmButtonColor: '#1B2F6E',
-                                    timer:             3000,
-                                    timerProgressBar:  true,
-                                });
-                            }, 400);
-                        })
-                        .catch((err) => {
-                            clearInterval(interval);
-                            console.error(err);
-                            Swal.fire({
-                                title: 'Erreur',
-                                text: 'Une erreur est survenue lors de l\'analyse. Vérifie les logs pour plus de détails.',
-                                icon: 'error',
-                                confirmButtonColor: '#E24B4A',
-                            });
-                        });
-                }
-            });
-        }
-    </script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/sweetalert2/11.10.5/sweetalert2.all.min.js"></script>
-
-    <style>
-        @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
-    </style>
-</div>
+                                @if($chain_expanded_id === $chain->chain_id)
+                                    <tr>
+                                        <td colspan="9" style="padding:0; background:#FAFBFC;">
+                                            <div style="padding:16px 16px 16px 46px;">
+                                                <p style="font-size:11px; font-weight:600; color:#6b7280; margin:0 0 10px;">Parcours de la chaîne</p>
+                                                <div style="display:flex; flex-direction:column; gap:0;">
+                                                    @foreach($chain_members as $i => $m)
+                                                        <div style="display:flex; gap:12px; padding-bottom:14px; position:relative;">
+                                                            <div style="display:flex; flex-direction:column; align-items:center; flex-shrink:0;">
+                                                                <div style="width:10px; height:10px; border-radius:50%; background:{{ $i === 0 ? '#00843D' : ($i === count($chain_members)-1 ? '#E24B4A' : '#1B2F6E') }};"></div>
+                                                                @if($i < count($chain_members) - 1)
+                                                                    <div style="width:1.5px; flex:1; background:#e5e7eb; margin-top:2px;"></div>
+                                                                @endif
+                                                            </div>
+                                                            <div style="font-size:12px; padding-bottom:2px;">
+                                                                <p style="margin:0; color:#111827; font-weight:500;">
+                                                                    {{ $m['transaction_type'] }}
+                                                                    <span style="color:#9ca3af; font-weight:400;">— {{ \Carbon\Carbon::parse($m['transaction_time'])->format('d/m/Y H:i:s') }}</span>
+                                                                </p>
+                                                                <p style="margin:2px 0 0; color:#6b7280;">
+                                                                    {{ $m['from_msisdn'] }} → {{ $m['to_msisdn'] }}
+                                                                    · <span style="color:#111827; font-weight:500;">{{ number_format($m['amount']*100, 0, ',', ' ') }}</span>
+                                                                    @if((float) ($m['commission']*100 ?? 0) > 0)
+                                                                        <span style="color:#9ca3af;">(commission {{ number_format($m['commission']*100, 0, ',', ' ') }})</span>
+                                                                    @endif
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                    @endforeach
+                                                </div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                @endif
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+                <div style="padding:12px 0 0;">
+                    {{ $chains->links() }}
+                </div>
+            @endif
+        @endif
+    </div>
 
 </div>

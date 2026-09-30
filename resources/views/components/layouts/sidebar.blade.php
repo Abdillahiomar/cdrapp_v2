@@ -179,7 +179,7 @@
         
 
         {{-- ── ANALYSE ── --}}
-        @canany(['daily-report.view', 'fraudes.view', 'fraudes.analyse'])
+        @canany(['daily-report.view'])
             <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Analyse</p>
 
             @can('daily-report.view')
@@ -212,25 +212,28 @@
            
         @endcanany
 
+
+        {{--  Fraude and AML Section --}}
+
         @can('fraudes.view')
            <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">
             AML & Détection de Fraude</p>
            
+            <a href="{{ route('fraudes.index') }}" wire:navigate
+                style="{{ request()->routeIs('fraudes.index') ? $linkActive : $linkInactive }}">
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
+                        <path d="M8 2L1 14h14L8 2zm0 5v4"/><circle cx="8" cy="12" r="0.8"/>
+                    </svg>
+                    Detection de fraude
+                <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#ef4444; flex-shrink:0;"></span>
+            </a>   
+
             <a href="{{ route('aml.index') }}" wire:navigate
-                style="{{ request()->routeIs('aml.index') ? $linkActive : $linkInactive }}">
+                   style="{{ request()->routeIs('aml.index') ? $linkActive : $linkInactive }}">
                     <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
                         <path d="M8 2L1 14h14L8 2zm0 5v4"/><circle cx="8" cy="12" r="0.8"/>
                     </svg>
                     AML
-                <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#ef4444; flex-shrink:0;"></span>
-            </a>   
-
-            <a href="{{ route('fraudes.index') }}" wire:navigate
-                   style="{{ request()->routeIs('fraudes.*') ? $linkActive : $linkInactive }}">
-                    <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
-                        <path d="M8 2L1 14h14L8 2zm0 5v4"/><circle cx="8" cy="12" r="0.8"/>
-                    </svg>
-                    Détection fraude
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#ef4444; flex-shrink:0;"></span>
             </a>    
         @endcan
