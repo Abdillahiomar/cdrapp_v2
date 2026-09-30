@@ -311,7 +311,7 @@ new class extends Component {
                                                         <span style="color:#111827;">{{ $d['agent_id'] }}</span>
                                                         <span style="color:#6b7280;">{{ \Carbon\Carbon::parse($d['activity_date'])->format('d/m/Y') }}</span>
                                                         <span style="color:#6b7280;">{{ number_format($d['cashin_count'], 0, ',', ' ') }} opérations</span>
-                                                        <span style="color:#111827; font-weight:500;">{{ number_format($d['cashin_amount'], 0, ',', ' ') }}</span>
+                                                        <span style="color:#111827; font-weight:500;">{{ number_format($d['cashin_amount']*100, 0, ',', ' ') }}</span>
                                                     </div>
                                                 @empty
                                                     <p style="font-size:12px; color:#9ca3af;">Aucun détail.</p>
