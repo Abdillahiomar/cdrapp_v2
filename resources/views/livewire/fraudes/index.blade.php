@@ -256,6 +256,58 @@ new class extends Component {
         <p style="font-size:12px; color:#9ca3af; margin:0;">Structuring (cash-in multi-agents) et reconstitution des chaînes de transactions.</p>
     </div>
 
+    
+    {{-- ÉTAT DES TRAITEMENTS --}}
+    <div style="display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; margin-bottom:20px;">
+        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px 16px;">
+            <p style="font-size:10px; color:#9ca3af; margin:0 0 4px; text-transform:uppercase; letter-spacing:0.5px;">S1 — Agent → Client (quotidien)</p>
+            @if($processingStatus['s1'])
+                <p style="font-size:12px; color:#111827; margin:0;">
+                    {{ \Carbon\Carbon::parse($processingStatus['s1']->activity_date)->format('d/m/Y') }}
+                    <span style="background:{{ $processingStatus['s1']->status === 'SUCCESS' ? '#E5F5ED' : ($processingStatus['s1']->status === 'FAILED' ? '#FDE8E8' : '#FEF3C7') }};
+                                 color:{{ $processingStatus['s1']->status === 'SUCCESS' ? '#005C2B' : ($processingStatus['s1']->status === 'FAILED' ? '#7F1D1D' : '#92400E') }};
+                                 font-size:10px; font-weight:600; padding:2px 8px; border-radius:20px; margin-left:6px;">
+                        {{ $processingStatus['s1']->status }}
+                    </span>
+                </p>
+                <p style="font-size:11px; color:#9ca3af; margin:4px 0 0;">{{ number_format($processingStatus['s1']->rows_processed, 0, ',', ' ') }} lignes</p>
+            @else
+                <p style="font-size:12px; color:#9ca3af; margin:0;">Aucune exécution enregistrée.</p>
+            @endif
+        </div>
+
+        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px 16px;">
+            <p style="font-size:10px; color:#9ca3af; margin:0 0 4px; text-transform:uppercase; letter-spacing:0.5px;">S2 — Client multi-agents (quotidien)</p>
+            @if($processingStatus['s2'])
+                <p style="font-size:12px; color:#111827; margin:0;">
+                    {{ \Carbon\Carbon::parse($processingStatus['s2']->activity_date)->format('d/m/Y') }}
+                    <span style="background:{{ $processingStatus['s2']->status === 'SUCCESS' ? '#E5F5ED' : ($processingStatus['s2']->status === 'FAILED' ? '#FDE8E8' : '#FEF3C7') }};
+                                 color:{{ $processingStatus['s2']->status === 'SUCCESS' ? '#005C2B' : ($processingStatus['s2']->status === 'FAILED' ? '#7F1D1D' : '#92400E') }};
+                                 font-size:10px; font-weight:600; padding:2px 8px; border-radius:20px; margin-left:6px;">
+                        {{ $processingStatus['s2']->status }}
+                    </span>
+                </p>
+                <p style="font-size:11px; color:#9ca3af; margin:4px 0 0;">{{ number_format($processingStatus['s2']->rows_processed, 0, ',', ' ') }} lignes</p>
+            @else
+                <p style="font-size:12px; color:#9ca3af; margin:0;">Aucune exécution enregistrée.</p>
+            @endif
+        </div>
+
+        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px 16px;">
+            <p style="font-size:10px; color:#9ca3af; margin:0 0 4px; text-transform:uppercase; letter-spacing:0.5px;">S3 — Chaînes (hebdomadaire)</p>
+            @if($processingStatus['s3'] && $processingStatus['s3']->last_run_at)
+                <p style="font-size:12px; color:#111827; margin:0;">
+                    Semaine du {{ \Carbon\Carbon::parse($processingStatus['s3']->last_activity_date)->format('d/m/Y') }}
+                </p>
+                <p style="font-size:11px; color:#9ca3af; margin:4px 0 0;">
+                    {{ number_format($processingStatus['s3']->total_chains, 0, ',', ' ') }} chaînes au total — calculées le {{ \Carbon\Carbon::parse($processingStatus['s3']->last_run_at)->format('d/m/Y H:i') }}
+                </p>
+            @else
+                <p style="font-size:12px; color:#9ca3af; margin:0;">Aucune chaîne calculée.</p>
+            @endif
+        </div>
+    </div>
+
     {{-- SECTION COMMISSION INDUE (CASH IN RÉPÉTÉS) --}}
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px; margin-bottom:20px;">
         <p style="font-size:13px; font-weight:700; color:#111827; margin:0 0 4px;">Commission indue — Cash In répétés entre un agent et un client</p>
@@ -324,56 +376,6 @@ new class extends Component {
         @endif
     </div>
 
-    {{-- ÉTAT DES TRAITEMENTS --}}
-    <div style="display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; margin-bottom:20px;">
-        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px 16px;">
-            <p style="font-size:10px; color:#9ca3af; margin:0 0 4px; text-transform:uppercase; letter-spacing:0.5px;">S1 — Agent → Client (quotidien)</p>
-            @if($processingStatus['s1'])
-                <p style="font-size:12px; color:#111827; margin:0;">
-                    {{ \Carbon\Carbon::parse($processingStatus['s1']->activity_date)->format('d/m/Y') }}
-                    <span style="background:{{ $processingStatus['s1']->status === 'SUCCESS' ? '#E5F5ED' : ($processingStatus['s1']->status === 'FAILED' ? '#FDE8E8' : '#FEF3C7') }};
-                                 color:{{ $processingStatus['s1']->status === 'SUCCESS' ? '#005C2B' : ($processingStatus['s1']->status === 'FAILED' ? '#7F1D1D' : '#92400E') }};
-                                 font-size:10px; font-weight:600; padding:2px 8px; border-radius:20px; margin-left:6px;">
-                        {{ $processingStatus['s1']->status }}
-                    </span>
-                </p>
-                <p style="font-size:11px; color:#9ca3af; margin:4px 0 0;">{{ number_format($processingStatus['s1']->rows_processed, 0, ',', ' ') }} lignes</p>
-            @else
-                <p style="font-size:12px; color:#9ca3af; margin:0;">Aucune exécution enregistrée.</p>
-            @endif
-        </div>
-
-        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px 16px;">
-            <p style="font-size:10px; color:#9ca3af; margin:0 0 4px; text-transform:uppercase; letter-spacing:0.5px;">S2 — Client multi-agents (quotidien)</p>
-            @if($processingStatus['s2'])
-                <p style="font-size:12px; color:#111827; margin:0;">
-                    {{ \Carbon\Carbon::parse($processingStatus['s2']->activity_date)->format('d/m/Y') }}
-                    <span style="background:{{ $processingStatus['s2']->status === 'SUCCESS' ? '#E5F5ED' : ($processingStatus['s2']->status === 'FAILED' ? '#FDE8E8' : '#FEF3C7') }};
-                                 color:{{ $processingStatus['s2']->status === 'SUCCESS' ? '#005C2B' : ($processingStatus['s2']->status === 'FAILED' ? '#7F1D1D' : '#92400E') }};
-                                 font-size:10px; font-weight:600; padding:2px 8px; border-radius:20px; margin-left:6px;">
-                        {{ $processingStatus['s2']->status }}
-                    </span>
-                </p>
-                <p style="font-size:11px; color:#9ca3af; margin:4px 0 0;">{{ number_format($processingStatus['s2']->rows_processed, 0, ',', ' ') }} lignes</p>
-            @else
-                <p style="font-size:12px; color:#9ca3af; margin:0;">Aucune exécution enregistrée.</p>
-            @endif
-        </div>
-
-        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px 16px;">
-            <p style="font-size:10px; color:#9ca3af; margin:0 0 4px; text-transform:uppercase; letter-spacing:0.5px;">S3 — Chaînes (hebdomadaire)</p>
-            @if($processingStatus['s3'] && $processingStatus['s3']->last_run_at)
-                <p style="font-size:12px; color:#111827; margin:0;">
-                    Semaine du {{ \Carbon\Carbon::parse($processingStatus['s3']->last_activity_date)->format('d/m/Y') }}
-                </p>
-                <p style="font-size:11px; color:#9ca3af; margin:4px 0 0;">
-                    {{ number_format($processingStatus['s3']->total_chains, 0, ',', ' ') }} chaînes au total — calculées le {{ \Carbon\Carbon::parse($processingStatus['s3']->last_run_at)->format('d/m/Y H:i') }}
-                </p>
-            @else
-                <p style="font-size:12px; color:#9ca3af; margin:0;">Aucune chaîne calculée.</p>
-            @endif
-        </div>
-    </div>
 
     {{-- SECTION STRUCTURING --}}
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px; margin-bottom:20px;">
@@ -494,34 +496,7 @@ new class extends Component {
             @if($chains->isEmpty())
                 <p style="font-size:12px; color:#9ca3af; text-align:center; padding:24px;">Aucune chaîne détectée sur cette période.</p>
             @else
-                {{-- RÉCAPITULATIF PAR AGENT D'ORIGINE --}}
-                <div style="margin-bottom:20px;">
-                    <p style="font-size:12px; font-weight:600; color:#111827; margin:0 0 10px;">Récapitulatif par agent d'origine</p>
-                    <div style="overflow-x:auto; border:1px solid #e5e7eb; border-radius:8px;">
-                        <table style="width:100%; border-collapse:collapse; font-size:12px;">
-                            <thead>
-                                <tr style="background:#F7F8FC;">
-                                    <th style="padding:8px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Agent</th>
-                                    <th style="padding:8px 14px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Nb chaînes</th>
-                                    <th style="padding:8px 14px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Commission totale</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                @forelse($agentSummary as $agent)
-                                    <tr style="border-bottom:1px solid #f3f4f6;">
-                                        <td style="padding:8px 14px; color:#111827; font-weight:500;">{{ $agent->origin_agent_id }}</td>
-                                        <td style="padding:8px 14px; text-align:center; color:#6b7280;">{{ number_format($agent->nb_chains, 0, ',', ' ') }}</td>
-                                        <td style="padding:8px 14px; text-align:right; color:#111827;">{{ number_format($agent->total_commission, 0, ',', ' ') }}</td>
-                                    </tr>
-                                @empty
-                                    <tr>
-                                        <td colspan="3" style="padding:16px; text-align:center; color:#9ca3af;">Aucun agent sur cette période.</td>
-                                    </tr>
-                                @endforelse
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+                
 
                 <div style="overflow-x:auto;">
                     <table style="width:100%; border-collapse:collapse; font-size:12px;">
@@ -607,6 +582,36 @@ new class extends Component {
                 </div>
                 <div style="padding:12px 0 0;">
                     {{ $chains->links() }}
+                </div>
+
+
+                {{-- RÉCAPITULATIF PAR AGENT D'ORIGINE --}}
+                <div style="margin-bottom:20px;">
+                    <p style="font-size:12px; font-weight:600; color:#111827; margin:0 0 10px;">Récapitulatif par agent d'origine</p>
+                    <div style="overflow-x:auto; border:1px solid #e5e7eb; border-radius:8px;">
+                        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                            <thead>
+                                <tr style="background:#F7F8FC;">
+                                    <th style="padding:8px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Agent</th>
+                                    <th style="padding:8px 14px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Nb chaînes</th>
+                                    <th style="padding:8px 14px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Commission totale</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @forelse($agentSummary as $agent)
+                                    <tr style="border-bottom:1px solid #f3f4f6;">
+                                        <td style="padding:8px 14px; color:#111827; font-weight:500;">{{ $agent->origin_agent_id }}</td>
+                                        <td style="padding:8px 14px; text-align:center; color:#6b7280;">{{ number_format($agent->nb_chains, 0, ',', ' ') }}</td>
+                                        <td style="padding:8px 14px; text-align:right; color:#111827;">{{ number_format($agent->total_commission, 0, ',', ' ') }}</td>
+                                    </tr>
+                                @empty
+                                    <tr>
+                                        <td colspan="3" style="padding:16px; text-align:center; color:#9ca3af;">Aucun agent sur cette période.</td>
+                                    </tr>
+                                @endforelse
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             @endif
         @endif

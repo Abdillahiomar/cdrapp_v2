@@ -27,6 +27,7 @@ class RolesPermissionsSeeder extends Seeder
             'admin.roles.view', 'admin.roles.manage',
             'admin.departments.view', 'admin.departments.manage',
             'admin.audit-logs.view',
+            'kyc.duplicates.view',
         ];
 
         foreach ($permissions as $perm) {
@@ -81,6 +82,7 @@ class RolesPermissionsSeeder extends Seeder
             'fraudes.view', 'fraudes.analyse',
             'customers.view',
             'organizations.view',
+            'kyc.duplicates.view',
         ]);
 
         $agentOps = $roleClass::firstOrCreate(
@@ -106,9 +108,10 @@ class RolesPermissionsSeeder extends Seeder
             'transactions.view', 
             'transactions.summary.view',
             'daily-report.view',
-            'organizations.view', 
+            'organizations.view',
             'organizations.operators.view',
             'fraudes.view',
+            'kyc.duplicates.view',
         ]);
 
         $this->command->info('✓ Départements, rôles et permissions créés avec succès.');

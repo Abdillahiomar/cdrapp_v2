@@ -24,6 +24,8 @@ Volt::route('/reporting/transactions', 'dashboard.transactions-dashboard')->name
 Volt::route('/fraudes', 'fraudes.aml')->name('aml.index')->middleware('auth');
 Volt::route('/detection_de_fraude', 'fraudes.index')->name('fraudes.index')->middleware('auth');
 
+Volt::route('/kyc-management', 'kyc.index')->name('kyc.index')->middleware(['auth', 'permission:kyc.duplicates.view']);
+
 Volt::route('/operations/bulk_search', 'operations.index')->name('operations.index')->middleware('auth');
 Volt::route('/organizations', 'organizations.index')->name('organizations.index')->middleware('auth');
 Volt::route('/daily-report', 'dashboard.dailly')->name('daily-report.index')->middleware('auth');

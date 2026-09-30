@@ -235,7 +235,22 @@
                     </svg>
                     AML
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#ef4444; flex-shrink:0;"></span>
-            </a>    
+            </a>
+        @endcan
+
+        @can('kyc.duplicates.view')
+            <a href="{{ route('kyc.index') }}" wire:navigate
+               style="{{ request()->routeIs('kyc.index') ? $linkActive : $linkInactive }}">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
+                    <circle cx="6" cy="6" r="2.5" fill="none" stroke="currentColor" stroke-width="1.2"/>
+                    <circle cx="11" cy="9" r="2.5" fill="none" stroke="currentColor" stroke-width="1.2"/>
+                    <path d="M2 14c0-2.5 1.8-4 4-4M9 14c0-2 1.4-3.3 3-3.3" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+                </svg>
+                KYC — Comptes multiples
+                @if(request()->routeIs('kyc.index'))
+                    <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
+                @endif
+            </a>
         @endcan
             
 
