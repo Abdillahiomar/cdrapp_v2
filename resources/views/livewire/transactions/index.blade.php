@@ -2,6 +2,8 @@
 
 use Livewire\Volt\Component;
 use App\Models\Transaction;
+use App\Models\ExportRequest;
+use App\Jobs\GenerateTransactionsExport;
 use Livewire\WithPagination;
 
 new class extends Component {
@@ -73,71 +75,32 @@ new class extends Component {
 
     /**
      * Applique tous les filtres actifs à une requête Transaction.
-     * Centralisé pour éviter la duplication entre with(), exportExcel(), etc.
+     * Délègue à App\Support\TransactionFilters, partagée avec le job d'export
+     * en arrière-plan pour garantir un résultat identique.
      */
     private function applyFilters($query)
     {
-        // Transaction ID
-        if ($this->ORDERID) {
-            $query->where('transaction_id', 'like', '%' . $this->ORDERID . '%');
-        }
+        return \App\Support\TransactionFilters::apply($query, $this->currentFilters());
+    }
 
-        // Debit Party
-        if ($this->DEBIT_MSISDN) {
-            $query->where('debit_party_identifier', $this->DEBIT_MSISDN);
-            
-        }
-
-        // Credit Party
-        if ($this->CREDIT_MSISDN) {
-            $query->where('credit_party_identifier',$this->CREDIT_MSISDN);
-        }
-
-        // Transaction types
-        if (!empty($this->TXN_INDEXES)) {
-            $query->whereIn('txn_index', $this->TXN_INDEXES);
-        }
-
-        // Reason types (filtre sur reason_type = index)
-        if (!empty($this->REASON_NAMES)) {
-            $query->whereIn('reason_index', $this->REASON_NAMES);
-        }
-
-        // Statut
-        if ($this->TRANS_STATUS) {
-            $query->where('status', $this->TRANS_STATUS);
-        }
-
-        // Canal
-        if ($this->CHANNEL) {
-            $query->where('channel', $this->CHANNEL);
-        }
-
-        // Date début — comparaison directe pour utiliser l'index (pas de cast ::date)
-        if ($this->date_debut) {
-            $query->where('transaction_initiated_time', '>=', $this->date_debut . ' 00:00:00');
-        }
-
-        // Date fin — borne exclusive au lendemain, pour rester "sargable"
-        if ($this->date_fin) {
-            $query->where(
-                'transaction_initiated_time',
-                '<',
-                \Carbon\Carbon::parse($this->date_fin)->addDay()->format('Y-m-d') . ' 00:00:00'
-            );
-        }
-
-        // Debit segment
-        if ($this->DEBIT_SEGMENT) {
-            $query->where('debit_party_type', $this->DEBIT_SEGMENT);
-        }
-
-        // Credit segment
-        if ($this->CREDIT_SEGMENT) {
-            $query->where('credit_party_type', $this->CREDIT_SEGMENT);
-        }
-
-        return $query;
+    /**
+     * Snapshot des filtres actifs, sérialisable (utilisé pour l'export en file d'attente).
+     */
+    private function currentFilters(): array
+    {
+        return [
+            'ORDERID'       => $this->ORDERID,
+            'DEBIT_MSISDN'  => $this->DEBIT_MSISDN,
+            'CREDIT_MSISDN' => $this->CREDIT_MSISDN,
+            'TXN_INDEXES'   => $this->TXN_INDEXES,
+            'REASON_NAMES'  => $this->REASON_NAMES,
+            'TRANS_STATUS'  => $this->TRANS_STATUS,
+            'CHANNEL'       => $this->CHANNEL,
+            'date_debut'    => $this->date_debut,
+            'date_fin'      => $this->date_fin,
+            'DEBIT_SEGMENT' => $this->DEBIT_SEGMENT,
+            'CREDIT_SEGMENT'=> $this->CREDIT_SEGMENT,
+        ];
     }
 
     public function with()
@@ -145,12 +108,18 @@ new class extends Component {
         $transaction_types = \App\Models\TransactionType::all();
         $segments          = \App\Models\Segment::all();
 
+        $myExports = ExportRequest::where('user_id', auth()->id())
+            ->latest()
+            ->limit(5)
+            ->get();
+
         if (!$this->searched) {
             return [
                 'transactions'      => null,
                 'transaction_types' => $transaction_types,
                 'segments'          => $segments,
                 'reason_types'      => $this->getreasonTypes(),
+                'myExports'         => $myExports,
             ];
         }
 
@@ -165,38 +134,52 @@ new class extends Component {
             'transaction_types' => $transaction_types,
             'segments'          => $segments,
             'reason_types'      => $this->getreasonTypes(),
+            'myExports'         => $myExports,
         ];
     }
 
     public function exportExcel()
     {
-        ini_set('memory_limit', '1024M');
-        set_time_limit(600);
-
-        return \Maatwebsite\Excel\Facades\Excel::download(
-            new \App\Exports\TransactionsExcelExport($this->buildQuery()),
-            'transactions_' . now()->format('Ymd_His') . '.xlsx'
-        );
+        $this->queueExport('excel');
     }
 
     public function exportCsv()
     {
-        ini_set('memory_limit', '1024M');
-        set_time_limit(600);
-
-        return \Maatwebsite\Excel\Facades\Excel::download(
-            new \App\Exports\TransactionsCsvExport($this->buildQuery()),
-            'transactions_' . now()->format('Ymd_His') . '.csv',
-            \Maatwebsite\Excel\Excel::CSV,
-            ['Content-Type' => 'text/csv; charset=UTF-8']
-        );
+        $this->queueExport('csv');
     }
 
-    private function buildQuery()
+    /**
+     * Crée une demande d'export et la place en file d'attente : la génération
+     * du fichier (potentiellement longue) tourne en arrière-plan via un worker
+     * de queue, au lieu de bloquer un worker PHP pendant la requête HTTP.
+     */
+    private function queueExport(string $type): void
     {
-        // Réutilise applyFilters pour rester cohérent avec l'affichage
-        return $this->applyFilters(Transaction::query())
-                    ->orderBy('transaction_initiated_time', 'desc');
+        $exportRequest = ExportRequest::create([
+            'user_id' => auth()->id(),
+            'type'    => $type,
+            'status'  => 'pending',
+            'filters' => $this->currentFilters(),
+        ]);
+
+        GenerateTransactionsExport::dispatch($exportRequest);
+
+        session()->flash('export-message', "Export {$type} lancé — vous pourrez le télécharger ci-dessous une fois prêt.");
+    }
+
+    public function downloadExport(int $exportId)
+    {
+        $export = ExportRequest::where('user_id', auth()->id())->findOrFail($exportId);
+
+        if ($export->status !== 'done' || !$export->file_path || !\Storage::disk('local')->exists($export->file_path)) {
+            session()->flash('export-error', "Ce fichier n'est plus disponible.");
+            return null;
+        }
+
+        return response()->download(
+            \Storage::disk('local')->path($export->file_path),
+            $export->fileName()
+        );
     }
 
 }; ?>
@@ -453,6 +436,51 @@ new class extends Component {
         </div>
     </div>
 
+    {{-- FLASH EXPORT --}}
+    @if(session('export-message'))
+        <div style="background:#E5F5ED; color:#005C2B; border:1px solid #a7d7b8; border-radius:8px; padding:12px 16px; margin-bottom:16px; font-size:13px;">
+            {{ session('export-message') }}
+        </div>
+    @endif
+    @if(session('export-error'))
+        <div style="background:#FDE8E8; color:#7F1D1D; border:1px solid #f3b4b4; border-radius:8px; padding:12px 16px; margin-bottom:16px; font-size:13px;">
+            {{ session('export-error') }}
+        </div>
+    @endif
+
+    {{-- MES EXPORTS --}}
+    @if($myExports->isNotEmpty())
+        <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; margin-bottom:16px;"
+             @if($myExports->whereIn('status', ['pending', 'processing'])->isNotEmpty()) wire:poll.5s @endif>
+            <p style="font-size:12px; font-weight:600; color:#111827; margin:0 0 10px;">Mes exports récents</p>
+            <div style="display:flex; flex-direction:column; gap:6px;">
+                @foreach($myExports as $export)
+                    <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 12px; background:#F7F8FC; border-radius:7px; font-size:12px;">
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <span style="color:#111827; font-weight:500;">{{ strtoupper($export->type) }}</span>
+                            <span style="color:#9ca3af;">{{ $export->created_at->format('d/m/Y H:i') }}</span>
+                            @if($export->status === 'pending')
+                                <span style="background:#FEF3C7; color:#92400E; font-size:10px; font-weight:600; padding:2px 8px; border-radius:20px;">En attente</span>
+                            @elseif($export->status === 'processing')
+                                <span style="background:#DBEAFE; color:#1E40AF; font-size:10px; font-weight:600; padding:2px 8px; border-radius:20px;">En cours...</span>
+                            @elseif($export->status === 'done')
+                                <span style="background:#E5F5ED; color:#005C2B; font-size:10px; font-weight:600; padding:2px 8px; border-radius:20px;">Prêt</span>
+                            @else
+                                <span style="background:#FDE8E8; color:#7F1D1D; font-size:10px; font-weight:600; padding:2px 8px; border-radius:20px;" title="{{ $export->error }}">Échec</span>
+                            @endif
+                        </div>
+                        @if($export->status === 'done')
+                            <button wire:click="downloadExport({{ $export->id }})"
+                                    style="background:#1B2F6E; color:#fff; font-size:11px; font-weight:600; padding:5px 12px; border-radius:6px; border:none; cursor:pointer;">
+                                Télécharger
+                            </button>
+                        @endif
+                    </div>
+                @endforeach
+            </div>
+        </div>
+    @endif
+
     {{-- ÉTAT INITIAL --}}
     @if(!$searched)
         <div style="text-align:center; padding:60px 20px; background:#fff; border:1px solid #e5e7eb; border-radius:10px;">
@@ -617,8 +645,8 @@ new class extends Component {
 
         function lancerTelechargement(format) {
             Swal.fire({
-                title: 'Génération en cours...',
-                text: `Préparation du fichier ${format.toUpperCase()}.`,
+                title: 'Envoi de la demande...',
+                text: `Mise en file d'attente de l'export ${format.toUpperCase()}.`,
                 allowOutsideClick: false,
                 showConfirmButton: false,
                 didOpen: () => {
@@ -632,18 +660,18 @@ new class extends Component {
                     component.call(method)
                         .then(() => {
                             Swal.fire({
-                                title: 'Téléchargement lancé !',
-                                text: `Votre fichier ${format.toUpperCase()} a été généré.`,
+                                title: 'Export lancé !',
+                                text: `Le fichier ${format.toUpperCase()} se génère en arrière-plan — retrouvez-le dans "Mes exports récents" dès qu'il est prêt.`,
                                 icon: 'success',
                                 confirmButtonColor: '#1B2F6E',
-                                timer: 2500,
+                                timer: 3500,
                                 timerProgressBar: true,
                             });
                         })
                         .catch(() => {
                             Swal.fire({
                                 title: 'Erreur',
-                                text: "Une erreur est survenue lors de l'export.",
+                                text: "Une erreur est survenue lors de la mise en file d'attente de l'export.",
                                 icon: 'error',
                                 confirmButtonColor: '#E24B4A',
                             });

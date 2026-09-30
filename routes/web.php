@@ -11,10 +11,6 @@ Route::get('/reporting/transactions/pptx',
 
 Route::view('/', 'welcome');
 
-//Route::view('dashboard', 'dashboard')->middleware(['auth', 'verified'])->name('dashboard');
-
-Route::view('profile', 'profile')->middleware(['auth'])->name('profile');
-
 Volt::route('/customers', 'customers.index')->name('customers.index');
 Volt::route('/transactions', 'transactions.index')->name('transactions.index');
 
