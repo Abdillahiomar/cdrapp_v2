@@ -20,6 +20,23 @@ new class extends Component {
         }
     }
 
+    /**
+     * Aperçu tronqué de la liste des msisdn — protège le rendu même si une
+     * ligne dépasse le seuil de garde-fou par un autre chemin (recherche, etc.).
+     */
+    public function msisdnPreview(string $msisdns, int $limit = 15): array
+    {
+        $all = explode('/', $msisdns, $limit + 1);
+
+        $remaining = 0;
+        if (count($all) > $limit) {
+            array_pop($all);
+            $remaining = substr_count($msisdns, '/') + 1 - $limit;
+        }
+
+        return ['list' => $all, 'remaining' => $remaining];
+    }
+
     public function with(): array
     {
         $query = DB::table('kyc_duplicate_identities');
@@ -39,6 +56,11 @@ new class extends Component {
         }
 
         $query->where('msisdn_count', '>=', max(2, $this->min_accounts));
+
+        // Garde-fou : un groupe avec un nombre de comptes déraisonnable est presque
+        // toujours un artefact de données (nom/valeur par défaut partagé par erreur),
+        // pas un vrai doublon exploitable. On l'exclut par défaut de l'affichage.
+        $query->where('msisdn_count', '<=', 100);
 
         return [
             'duplicates'   => $query->orderByDesc('msisdn_count')->paginate(30),
@@ -133,10 +155,14 @@ new class extends Component {
                                 </span>
                             </td>
                             <td style="padding:10px 16px; color:#6b7280;">
+                                @php $preview = $this->msisdnPreview($row->msisdns); @endphp
                                 <div style="display:flex; flex-wrap:wrap; gap:4px; max-width:320px;">
-                                    @foreach(explode('/', $row->msisdns) as $msisdn)
+                                    @foreach($preview['list'] as $msisdn)
                                         <span style="background:#F7F8FC; border:1px solid #e5e7eb; font-size:10px; padding:2px 8px; border-radius:6px; white-space:nowrap;">{{ $msisdn }}</span>
                                     @endforeach
+                                    @if($preview['remaining'] > 0)
+                                        <span style="color:#9ca3af; font-size:10px; padding:2px 4px;">+{{ $preview['remaining'] }} autres</span>
+                                    @endif
                                 </div>
                             </td>
                         </tr>

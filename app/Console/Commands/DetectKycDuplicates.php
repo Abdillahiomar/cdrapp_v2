@@ -29,6 +29,16 @@ class DetectKycDuplicates extends Command
 
     protected $description = "Détecte les clients KYC associés à plusieurs comptes (msisdn)";
 
+    /**
+     * Un groupe au-delà de ce seuil n'est quasiment jamais un vrai doublon
+     * exploitable — c'est un artefact de données (nom/date par défaut partagé
+     * par erreur entre des milliers de fiches). On l'exclut à la source pour
+     * éviter à la fois du bruit dans l'interface et des lignes gigantesques
+     * (STRING_AGG de milliers de msisdn) qui peuvent faire exploser la mémoire
+     * au rendu.
+     */
+    private const MAX_GROUP_SIZE = 100;
+
     public function handle(): int
     {
         $startedAt = microtime(true);
@@ -60,8 +70,8 @@ class DetectKycDuplicates extends Command
                 WHERE id_number IS NOT NULL AND TRIM(id_number) <> ''
                   AND msisdn IS NOT NULL
                 GROUP BY id_type, TRIM(UPPER(id_number))
-                HAVING COUNT(DISTINCT msisdn) > 1
-            ", [$now]);
+                HAVING COUNT(DISTINCT msisdn) BETWEEN 2 AND ?
+            ", [$now, self::MAX_GROUP_SIZE]);
 
             // ── Niveau 2 : doublon probable par nom + nom de la mère + naissance ──
             DB::statement("
@@ -85,8 +95,8 @@ class DetectKycDuplicates extends Command
                   AND date_of_birth IS NOT NULL
                   AND msisdn IS NOT NULL
                 GROUP BY TRIM(UPPER(full_name)), TRIM(UPPER(mother_full_name)), date_of_birth
-                HAVING COUNT(DISTINCT msisdn) > 1
-            ", [$now]);
+                HAVING COUNT(DISTINCT msisdn) BETWEEN 2 AND ?
+            ", [$now, self::MAX_GROUP_SIZE]);
         });
 
         $total     = DB::table('kyc_duplicate_identities')->count();

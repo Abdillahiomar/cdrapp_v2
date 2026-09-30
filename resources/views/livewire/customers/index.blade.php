@@ -120,6 +120,7 @@ new class extends Component {
                     <option value="">Tous les profils</option>
                     <option value="RDS">RDS (KYC complet)</option>
                     <option value="RDS_LITE">RDS_LITE (KYC minimal)</option>
+                    <option value="RDS_ASERI">RDS_ASERI</option>
                 </select>
             </div>
 
@@ -258,6 +259,9 @@ new class extends Component {
                                         <span style="background:#E5F5ED; color:#005C2B; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">RDS</span>
                                     @elseif($customer->customer_profile === 'RDS_LITE')
                                         <span style="background:#E6F1FB; color:#0C447C; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">RDS_LITE</span>
+                                    
+                                    @elseif($customer->customer_profile === 'RDS_ASERI')
+                                        <span style="background:#E6F1FB; color:#0C448C; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">RDS_ASERI</span>
                                     @else
                                         <span style="background:#F3F4F6; color:#6b7280; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">—</span>
                                     @endif

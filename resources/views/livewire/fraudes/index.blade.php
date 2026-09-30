@@ -565,7 +565,7 @@ new class extends Component {
                                                                     {{ $m['from_msisdn'] }} → {{ $m['to_msisdn'] }}
                                                                     · <span style="color:#111827; font-weight:500;">{{ number_format($m['amount']*100, 0, ',', ' ') }}</span>
                                                                     @if((float) ($m['commission']*100 ?? 0) > 0)
-                                                                        <span style="color:#9ca3af;">(commission {{ number_format($m['commission']*100, 0, ',', ' ') }})</span>
+                                                                        <span style="color:#9ca3af;">(commission {{ number_format($m['commission']*100, 0, ',', ' ') }}) Transaction_id : {{$m['transaction_id']}} </span>
                                                                     @endif
                                                                 </p>
                                                             </div>
