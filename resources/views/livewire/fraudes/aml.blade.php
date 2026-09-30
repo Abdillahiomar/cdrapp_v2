@@ -100,6 +100,7 @@ new class extends Component {
             'processingStatus' => $this->getProcessingStatus(),
             'structuring'      => $this->getStructuring(),
             'chains'           => $this->getChains(),
+            'agentSummary'     => $this->getAgentSummary(),
         ];
     }
 
@@ -153,6 +154,28 @@ new class extends Component {
             ->orderByDesc('amount_retention_ratio')
             ->orderByDesc('send_money_hops')
             ->paginate(20, ['*'], 'chainPage');
+    }
+
+    /**
+     * Récapitulatif par agent d'origine : combien de fois cet agent apparaît
+     * comme point de départ d'une chaîne sur la période, et la commission
+     * totale qu'il a gagnée sur ces cash-in initiaux.
+     * Calculé sur l'ensemble de la période filtrée (pas seulement la page affichée).
+     */
+    private function getAgentSummary()
+    {
+        if (!$this->chain_searched) {
+            return null;
+        }
+
+        return DB::table('transaction_chains')
+            ->select('origin_agent_id')
+            ->selectRaw('COUNT(*) as nb_chains')
+            ->selectRaw('COALESCE(SUM(initial_commission), 0) as total_commission')
+            ->whereBetween('activity_date', [$this->chain_date_debut, $this->chain_date_fin])
+            ->groupBy('origin_agent_id')
+            ->orderByDesc('nb_chains')
+            ->get();
     }
 
     public function formatDuration(?int $seconds): string
@@ -357,6 +380,35 @@ new class extends Component {
             @if($chains->isEmpty())
                 <p style="font-size:12px; color:#9ca3af; text-align:center; padding:24px;">Aucune chaîne détectée sur cette période.</p>
             @else
+                {{-- RÉCAPITULATIF PAR AGENT D'ORIGINE --}}
+                <div style="margin-bottom:20px;">
+                    <p style="font-size:12px; font-weight:600; color:#111827; margin:0 0 10px;">Récapitulatif par agent d'origine</p>
+                    <div style="overflow-x:auto; border:1px solid #e5e7eb; border-radius:8px;">
+                        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                            <thead>
+                                <tr style="background:#F7F8FC;">
+                                    <th style="padding:8px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Agent</th>
+                                    <th style="padding:8px 14px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Nb chaînes</th>
+                                    <th style="padding:8px 14px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Commission totale</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @forelse($agentSummary as $agent)
+                                    <tr style="border-bottom:1px solid #f3f4f6;">
+                                        <td style="padding:8px 14px; color:#111827; font-weight:500;">{{ $agent->origin_agent_id }}</td>
+                                        <td style="padding:8px 14px; text-align:center; color:#6b7280;">{{ number_format($agent->nb_chains, 0, ',', ' ') }}</td>
+                                        <td style="padding:8px 14px; text-align:right; color:#111827;">{{ number_format($agent->total_commission, 0, ',', ' ') }}</td>
+                                    </tr>
+                                @empty
+                                    <tr>
+                                        <td colspan="3" style="padding:16px; text-align:center; color:#9ca3af;">Aucun agent sur cette période.</td>
+                                    </tr>
+                                @endforelse
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <div style="overflow-x:auto;">
                     <table style="width:100%; border-collapse:collapse; font-size:12px;">
                         <thead>
@@ -367,7 +419,7 @@ new class extends Component {
                                 <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Client origine</th>
                                 <th style="padding:10px 14px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Montant initial</th>
                                 <th style="padding:10px 14px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Montant final</th>
-                                <th style="padding:10px 14px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Sauts</th>
+                                <th style="padding:10px 14px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Poids de la Chaine</th>
                                 <th style="padding:10px 14px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Durée</th>
                                 <th style="padding:10px 14px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Rétention</th>
                                 <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Sortie</th>
