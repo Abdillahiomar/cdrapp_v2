@@ -271,7 +271,7 @@
         @endcan
 
         {{-- ── ADMINISTRATION ── --}}
-        @canany(['admin.users.view', 'admin.roles.view', 'admin.departments.view', 'admin.audit-logs.view'])
+        @canany(['admin.users.view', 'admin.roles.view', 'admin.departments.view', 'admin.audit-logs.view', 'admin.exports.view'])
             <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Administration</p>
 
             @can('admin.users.view')
@@ -311,6 +311,20 @@
                     </svg>
                     Journal de connexions
                     @if(request()->routeIs('admin.audit-logs.*'))
+                        <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
+                    @endif
+                </a>
+            @endcan
+
+            @can('admin.exports.view')
+                <a href="{{ route('admin.exports.index') }}" wire:navigate
+                   style="{{ request()->routeIs('admin.exports.*') ? $linkActive : $linkInactive }}">
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
+                        <path d="M3 1.5h6.5L13 5v9.5H3z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                        <path d="M8 6.5v5M5.8 9.3 8 11.5l2.2-2.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Exports
+                    @if(request()->routeIs('admin.exports.*'))
                         <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                     @endif
                 </a>

@@ -5,7 +5,6 @@ namespace App\Console\Commands;
 use App\Models\ExportRequest;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Storage;
 
 /**
  * Supprime du disque les fichiers d'export de transactions arrivés à expiration.
@@ -35,7 +34,6 @@ class CleanupExports extends Command
     public function handle(): int
     {
         $dryRun = (bool) $this->option('dry-run');
-        $disk   = Storage::disk('local');
 
         $uploadedCutoff = now()->subHours(self::UPLOADED_RETENTION_HOURS);
         $doneCutoff     = now()->subDays(self::DONE_RETENTION_DAYS);
@@ -57,10 +55,9 @@ class CleanupExports extends Command
 
         $count = 0;
 
-        $query->chunkById(200, function ($exports) use ($disk, $dryRun, &$count) {
+        $query->chunkById(200, function ($exports) use ($dryRun, &$count) {
             foreach ($exports as $export) {
-                // Un export en échec n'a pas de file_path : on reconstruit le chemin prévu par le job
-                $path = $export->file_path ?? 'exports/' . $export->id . '_' . $export->fileName();
+                $path = $export->storagePath();
 
                 $this->line(sprintf('#%d  %-8s  %s', $export->id, $export->status, $path));
 
@@ -69,16 +66,10 @@ class CleanupExports extends Command
                     continue;
                 }
 
-                if ($disk->exists($path) && !$disk->delete($path)) {
+                if (!$export->deleteFile()) {
                     $this->error("  Impossible de supprimer {$path} (permissions ?)");
                     continue;
                 }
-
-                $export->update([
-                    'status'     => 'deleted',
-                    'file_path'  => null,
-                    'deleted_at' => now(),
-                ]);
 
                 $count++;
             }

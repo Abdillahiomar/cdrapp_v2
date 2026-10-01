@@ -27,6 +27,7 @@ class RolesPermissionsSeeder extends Seeder
             'admin.roles.view', 'admin.roles.manage',
             'admin.departments.view', 'admin.departments.manage',
             'admin.audit-logs.view',
+            'admin.exports.view', 'admin.exports.delete',
             'kyc.duplicates.view',
         ];
 
