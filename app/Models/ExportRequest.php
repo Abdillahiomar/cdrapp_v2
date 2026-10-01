@@ -16,11 +16,15 @@ class ExportRequest extends Model
         'total_rows',
         'error',
         'completed_at',
+        'downloaded_at',
+        'deleted_at',
     ];
 
     protected $casts = [
-        'filters'      => 'array',
-        'completed_at' => 'datetime',
+        'filters'       => 'array',
+        'completed_at'  => 'datetime',
+        'downloaded_at' => 'datetime',
+        'deleted_at'    => 'datetime',
     ];
 
     public function user(): BelongsTo

@@ -15,7 +15,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->string('type');   // excel | csv
-            $table->string('status')->default('pending'); // pending | processing | done | uploaded | failed
+            $table->string('status')->default('pending'); // pending | processing | done | uploaded | failed | deleted
             $table->json('filters')->nullable();
             $table->string('file_path')->nullable();
             $table->unsignedInteger('total_rows')->nullable();

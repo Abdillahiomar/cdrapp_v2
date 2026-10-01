@@ -179,7 +179,7 @@ new class extends Component {
         }
 
         if ($export->status === 'done') {
-            $export->update(['status' => 'uploaded']);
+            $export->update(['status' => 'uploaded', 'downloaded_at' => now()]);
         }
 
         return response()->download(
