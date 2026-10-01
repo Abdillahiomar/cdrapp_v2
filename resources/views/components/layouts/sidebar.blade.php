@@ -215,10 +215,27 @@
 
         {{--  Fraude and AML Section --}}
 
-        @can('fraudes.view')
+        @canany(['fraudes.view', 'aml.alerts.view'])
            <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">
             AML & Détection de Fraude</p>
-           
+        @endcanany
+
+        @can('aml.alerts.view')
+            @php $amlNewAlerts = \App\Models\AmlAlert::newCount(); @endphp
+            <a href="{{ route('aml.alerts') }}" wire:navigate
+               style="{{ request()->routeIs('aml.alerts', 'aml.rules', 'aml.watchlist') ? $linkActive : $linkInactive }}">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
+                    <path d="M8 1a5 5 0 00-5 5v3l-1.5 2h13L13 9V6a5 5 0 00-5-5zm0 14a2 2 0 01-2-2h4a2 2 0 01-2 2z"/>
+                </svg>
+                Alertes AML
+                @if($amlNewAlerts > 0)
+                    <span style="margin-left:auto; background:#ef4444; color:#fff; font-size:10px; font-weight:700; padding:1px 7px; border-radius:10px; flex-shrink:0;">{{ $amlNewAlerts > 999 ? '999+' : $amlNewAlerts }}</span>
+                @endif
+            </a>
+        @endcan
+
+        @can('fraudes.view')
+
             <a href="{{ route('fraudes.index') }}" wire:navigate
                 style="{{ request()->routeIs('fraudes.index') ? $linkActive : $linkInactive }}">
                     <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">

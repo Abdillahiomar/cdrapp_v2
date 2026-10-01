@@ -17,12 +17,63 @@
         </span>
 
         {{-- Notifications --}}
-        <div style="position:relative; width:34px; height:34px; border:1px solid #e5e7eb; border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:pointer;">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="#6b7280">
-                <path d="M8 1a5 5 0 00-5 5v3l-1.5 2h13L13 9V6a5 5 0 00-5-5zm0 14a2 2 0 01-2-2h4a2 2 0 01-2 2z"/>
-            </svg>
-            <span style="position:absolute; top:6px; right:6px; width:7px; height:7px; background:#ef4444; border-radius:50%; border:2px solid #fff;"></span>
-        </div>
+        @can('aml.alerts.view')
+            @php
+                $amlNewCount  = \App\Models\AmlAlert::newCount();
+                $amlLatest    = $amlNewCount > 0
+                    ? \App\Models\AmlAlert::with('rule:id,code,name')->where('status', 'new')->latest('first_detected_at')->limit(5)->get()
+                    : collect();
+            @endphp
+            <div x-data="{ open: false }" style="position:relative;">
+                <div x-on:click="open = !open"
+                     style="position:relative; width:34px; height:34px; border:1px solid #e5e7eb; border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="#6b7280">
+                        <path d="M8 1a5 5 0 00-5 5v3l-1.5 2h13L13 9V6a5 5 0 00-5-5zm0 14a2 2 0 01-2-2h4a2 2 0 01-2 2z"/>
+                    </svg>
+                    @if($amlNewCount > 0)
+                        <span style="position:absolute; top:-6px; right:-6px; min-width:16px; height:16px; padding:0 4px; background:#ef4444; color:#fff; font-size:9px; font-weight:700; border-radius:8px; border:2px solid #fff; display:flex; align-items:center; justify-content:center; box-sizing:content-box;">
+                            {{ $amlNewCount > 99 ? '99+' : $amlNewCount }}
+                        </span>
+                    @endif
+                </div>
+
+                <div x-show="open" x-cloak
+                     x-on:click.outside="open = false"
+                     style="position:absolute; top:calc(100% + 8px); right:0; width:320px; background:#fff; border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,0.1); z-index:100; overflow:hidden;">
+                    <div style="padding:12px 14px; border-bottom:1px solid #f3f4f6; display:flex; justify-content:space-between; align-items:center;">
+                        <p style="font-size:12px; font-weight:600; color:#111827; margin:0;">Alertes AML</p>
+                        <span style="font-size:11px; color:#9ca3af;">{{ $amlNewCount }} nouvelle(s)</span>
+                    </div>
+                    @forelse($amlLatest as $notif)
+                        <a href="{{ route('aml.alerts') }}" wire:navigate
+                           style="display:block; padding:10px 14px; border-bottom:1px solid #f3f4f6; text-decoration:none;"
+                           onmouseover="this.style.background='#F7F8FC'"
+                           onmouseout="this.style.background='transparent'">
+                            <p style="font-size:12px; color:#111827; margin:0;">
+                                <strong style="color:{{ $notif->severity === 'high' ? '#B91C1C' : '#1B2F6E' }};">{{ $notif->rule->code ?? '' }}</strong>
+                                · {{ $notif->party_id }}
+                            </p>
+                            <p style="font-size:11px; color:#9ca3af; margin:2px 0 0;">
+                                {{ \Illuminate\Support\Str::limit($notif->rule->name ?? '', 38) }} · {{ $notif->first_detected_at->format('d/m H:i') }}
+                            </p>
+                        </a>
+                    @empty
+                        <p style="padding:16px 14px; font-size:12px; color:#9ca3af; margin:0;">Aucune nouvelle alerte.</p>
+                    @endforelse
+                    <a href="{{ route('aml.alerts') }}" wire:navigate
+                       style="display:block; padding:10px 14px; text-align:center; font-size:12px; font-weight:600; color:#1B2F6E; text-decoration:none; background:#F7F8FC;">
+                        Voir toutes les alertes →
+                    </a>
+                </div>
+            </div>
+        @else
+            <div style="position:relative; width:34px; height:34px; border:1px solid #e5e7eb; border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="#6b7280">
+                    <path d="M8 1a5 5 0 00-5 5v3l-1.5 2h13L13 9V6a5 5 0 00-5-5zm0 14a2 2 0 01-2-2h4a2 2 0 01-2 2z"/>
+                </svg>
+                <span style="position:absolute; top:6px; right:6px; width:7px; height:7px; background:#ef4444; border-radius:50%; border:2px solid #fff;"></span>
+            </div>
+        @endcan
 
         {{-- Profil avec dropdown --}}
 <div x-data="{ open: false }" style="position:relative;">
