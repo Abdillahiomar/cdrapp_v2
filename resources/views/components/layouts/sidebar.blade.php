@@ -140,7 +140,7 @@
                     <path d="M5 5V4a3 3 0 016 0v1"/>
                     <circle cx="8" cy="9" r="1.5"/>
                 </svg>
-                Relevés Bancaire
+                Ratio D'equivalance
                 @if(request()->routeIs('finance.*'))
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
