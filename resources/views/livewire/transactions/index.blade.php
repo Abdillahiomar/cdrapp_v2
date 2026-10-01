@@ -108,7 +108,9 @@ new class extends Component {
         $transaction_types = \App\Models\TransactionType::all();
         $segments          = \App\Models\Segment::all();
 
+        // Les exports déjà téléchargés (uploaded) ou en échec ne sont pas affichés
         $myExports = ExportRequest::where('user_id', auth()->id())
+            ->whereIn('status', ['pending', 'processing', 'done'])
             ->latest()
             ->limit(5)
             ->get();
@@ -171,9 +173,13 @@ new class extends Component {
     {
         $export = ExportRequest::where('user_id', auth()->id())->findOrFail($exportId);
 
-        if ($export->status !== 'done' || !$export->file_path || !\Storage::disk('local')->exists($export->file_path)) {
+        if (!in_array($export->status, ['done', 'uploaded']) || !$export->file_path || !\Storage::disk('local')->exists($export->file_path)) {
             session()->flash('export-error', "Ce fichier n'est plus disponible.");
             return null;
+        }
+
+        if ($export->status === 'done') {
+            $export->update(['status' => 'uploaded']);
         }
 
         return response()->download(
