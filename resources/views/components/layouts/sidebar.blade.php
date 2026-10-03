@@ -162,8 +162,11 @@
         @endcan
 
         {{-- ── OPÉRATIONS ── --}}
-       @can('operations.import-msisdn')
+        @canany(['operations.import-msisdn', 'tools.qrcode'])
             <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Opérations</p>
+        @endcanany
+
+       @can('operations.import-msisdn')
             <a href="{{ route('operations.index') }}" wire:navigate
                style="{{ request()->routeIs('operations.*') ? $linkActive : $linkInactive }}">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
@@ -172,6 +175,21 @@
                 </svg>
                 Import MSISDN
                 @if(request()->routeIs('operations.*'))
+                    <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
+                @endif
+            </a>
+        @endcan
+
+        @can('tools.qrcode')
+            <a href="{{ route('qrcode.index') }}" wire:navigate
+               style="{{ request()->routeIs('qrcode.*') ? $linkActive : $linkInactive }}">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
+                    <path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2z" fill="none" stroke="currentColor" stroke-width="1.2"/>
+                    <rect x="3.8" y="3.8" width="1.4" height="1.4"/><rect x="10.8" y="3.8" width="1.4" height="1.4"/><rect x="3.8" y="10.8" width="1.4" height="1.4"/>
+                    <path d="M9 9h2v2H9zM12 11h2v3h-2zM9 12h2v2H9z"/>
+                </svg>
+                Générateur QR Code
+                @if(request()->routeIs('qrcode.*'))
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
             </a>

@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
 use App\Http\Controllers\ReportingController;
+use App\Http\Controllers\QrCodeController;
 
 Route::get('/reporting/transactions/pptx',
     [ReportingController::class, 'exportTransactionsPptx'])
@@ -43,7 +44,15 @@ Volt::route('/ancien_cdrapp', 'transactions.old_transactions')->name('ancien_cdr
 Volt::route('/admin/roles', 'admin.roles.index')->name('admin.roles.index')->middleware(['auth', 'permission:admin.roles.view']);
 Volt::route('/admin/users', 'admin.users.index')->name('admin.users.index');
 Volt::route('/admin/audit-logs', 'admin.audit-logs.index')->name('admin.audit-logs.index')->middleware(['auth', 'permission:admin.audit-logs.view']);
-Volt::route('/admin/exports', 'admin.exports.index')->name('admin.exports.index')->middleware(['auth', 'permission:admin.exports.view']);
+Route::middleware(['auth', 'permission:tools.qrcode'])->prefix('outils/qr-code')->name('qrcode.')->group(function () {
+    Volt::route('/', 'tools.qrcode')->name('index');
+    Route::get('/modele', [QrCodeController::class, 'template'])->name('template');
+    Route::get('/lot/{qrBatch}', [QrCodeController::class, 'batch'])->name('batch');
+    Route::get('/{qrCode}/png', [QrCodeController::class, 'png'])->name('png');
+    Route::get('/{qrCode}/svg', [QrCodeController::class, 'svg'])->name('svg');
+    Route::get('/{qrCode}/imprimer', [QrCodeController::class, 'print'])->name('print');
+});
+Volt::route('/admin/exports','admin.exports.index')->name('admin.exports.index')->middleware(['auth', 'permission:admin.exports.view']);
 Volt::route('/profiles', 'admin.users.profile')->name('profile.index')->middleware('auth');
 
 
