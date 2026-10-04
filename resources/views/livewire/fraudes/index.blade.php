@@ -536,7 +536,7 @@ new class extends Component {
                                         <span style="background:{{ $risk === 'high' ? '#FDE8E8' : ($risk === 'medium' ? '#FEF3C7' : '#E5F5ED') }};
                                                      color:{{ $risk === 'high' ? '#7F1D1D' : ($risk === 'medium' ? '#92400E' : '#005C2B') }};
                                                      font-size:11px; font-weight:700; padding:2px 10px; border-radius:20px;">
-                                            {{ number_format(((float) $chain->amount_retention_ratio), 0) }}%
+                                            {{ number_format(((float) $chain->amount_retention_ratio) * 100, 0) }}%
                                         </span>
                                     </td>
                                     <td style="padding:10px 14px; color:#6b7280;">{{ $chain->final_transaction_type }}</td>
