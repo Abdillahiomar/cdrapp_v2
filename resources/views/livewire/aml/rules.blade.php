@@ -182,12 +182,13 @@ new class extends Component {
             'rules'      => AmlRule::orderBy('id')->get(),
             'types'      => $types,
             'typeNames'  => $types->pluck('txn_type_name', 'txn_index'),
-            // Liste des activités des organisations, change rarement
+            // Liste des activités des organisations, change rarement. Mise en cache en
+            // tableau : le cache ne restaure pas les objets (cache.serializable_classes = false)
             'activities' => $this->showForm
-                ? Cache::remember('aml_org_activities', 3600, fn () => DB::table('kyc.kyc_organizations')
+                ? Cache::remember('aml_org_activity_list', 3600, fn () => DB::table('kyc.kyc_organizations')
                     ->whereNotNull('activity')->where('activity', '<>', '')
-                    ->distinct()->orderBy('activity')->pluck('activity'))
-                : collect(),
+                    ->distinct()->orderBy('activity')->pluck('activity')->all())
+                : [],
         ];
     }
 };

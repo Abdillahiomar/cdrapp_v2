@@ -355,20 +355,32 @@ new class extends Component {
         return Cache::remember('manager_stats_first_year', 3600, fn () => substr((string) (DB::table('manager_daily_stats')->min('activity_date') ?? now()->toDateString()), 0, 4));
     }
 
+    /**
+     * Lignes mises en cache sous forme de tableaux : le cache refuse de
+     * restaurer des objets (config cache.serializable_classes = false), une
+     * Collection ou un stdClass reviendraient inutilisables.
+     */
+    private function cachedRows(string $key, \Closure $query): \Illuminate\Support\Collection
+    {
+        $rows = Cache::remember($key, 3600, fn () => $query()->map(fn ($r) => (array) $r)->all());
+
+        return collect($rows)->map(fn ($r) => (object) $r);
+    }
+
     public function with(): array
     {
-        $reasons = Cache::remember('manager_reasons_' . ($this->txnIndex ?: 'all'), 3600, fn () => DB::table('manager_daily_stats as s')
-            ->join('reason_types as r', 'r.reason_index', '=', 's.reason_index')
-            ->when($this->txnIndex !== '', fn ($q) => $q->where('s.txn_index', (int) $this->txnIndex))
-            ->select('r.reason_index', 'r.reason_name')
-            ->distinct()
-            ->orderBy('r.reason_name')
-            ->get());
-
         return [
-            'types'    => Cache::remember('manager_txn_types', 3600, fn () => DB::table('transaction_types')->orderBy('txn_type_name')->get(['txn_index', 'txn_type_name'])),
-            'reasons'  => $reasons,
-            'statuses' => Cache::remember('manager_statuses', 3600, fn () => DB::table('manager_daily_stats')->distinct()->orderBy('status')->pluck('status')),
+            'types'    => $this->cachedRows('manager_txn_types_rows', fn () => DB::table('transaction_types')
+                ->orderBy('txn_type_name')
+                ->get(['txn_index', 'txn_type_name'])),
+            'reasons'  => $this->cachedRows('manager_reasons_rows_' . ($this->txnIndex ?: 'all'), fn () => DB::table('manager_daily_stats as s')
+                ->join('reason_types as r', 'r.reason_index', '=', 's.reason_index')
+                ->when($this->txnIndex !== '', fn ($q) => $q->where('s.txn_index', (int) $this->txnIndex))
+                ->select('r.reason_index', 'r.reason_name')
+                ->distinct()
+                ->orderBy('r.reason_name')
+                ->get()),
+            'statuses' => Cache::remember('manager_status_list', 3600, fn () => DB::table('manager_daily_stats')->distinct()->orderBy('status')->pluck('status')->all()),
             'years'    => range((int) $this->firstYear(), (int) Carbon::parse($this->lastDate ?? now())->year),
         ];
     }
@@ -606,8 +618,17 @@ new class extends Component {
         { key: 'amount', id: 'mgr-chart-amount', unit: ' FDJ' },
     ];
 
-    function draw(report) {
-        if (typeof Chart === 'undefined' || !report || !report.labels) return;
+    function draw(report, attempt = 0) {
+        // Chart.js pas encore chargé (navigation wire:navigate) : on réessaie un peu plus tard
+        if (typeof Chart === 'undefined') {
+            if (attempt < 20) setTimeout(() => draw(report, attempt + 1), 150);
+            return;
+        }
+        if (!report || !report.labels) return;
+
+        // $wire renvoie des proxys réactifs ; Chart.js instrumente les tableaux qu'on lui
+        // donne et ne fonctionne pas sur ces proxys : on lui passe une copie simple.
+        report = JSON.parse(JSON.stringify(report));
 
         specs.forEach(({ key, id, unit }) => {
             const canvas = document.getElementById(id);
