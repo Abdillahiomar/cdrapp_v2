@@ -31,6 +31,7 @@ class RolesPermissionsSeeder extends Seeder
             'kyc.duplicates.view',
             'aml.alerts.view', 'aml.alerts.manage', 'aml.rules.manage', 'aml.watchlist.manage',
             'tools.qrcode',
+            'dashboard.admin',
         ];
 
         foreach ($permissions as $perm) {
