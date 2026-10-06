@@ -605,9 +605,15 @@ new class extends Component {
         </div>
     @endif
 
+{{--
+    Chart.js est chargé globalement dans le layout (components/layouts/app).
+    Le script doit commencer directement par une déclaration (const) : Alpine,
+    qui exécute les blocs @script, ne reconnaît un bloc d'instructions que s'il
+    commence par const / let / if. Un commentaire en tête le fait évaluer comme
+    une expression → "Unexpected token 'const'".
+--}}
 @script
 <script>
-    // Chart.js est chargé globalement dans le layout (components/layouts/app)
     const COLORS = { current: '#2a78d6', compare: '#eb6834', text: '#52514e', muted: '#6b7280', grid: '#eef0f4' };
     const fmt     = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 });
     const compact = new Intl.NumberFormat('fr-FR', { notation: 'compact', maximumFractionDigits: 1 });
