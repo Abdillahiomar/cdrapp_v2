@@ -2,6 +2,7 @@
 // resources/views/livewire/operations/import-msisdn.blade.php
 
 use App\Models\Customer;
+use App\Support\NameMatcher;
 use Livewire\Volt\Component;
 use Livewire\WithFileUploads;
 use Maatwebsite\Excel\Facades\Excel;
@@ -14,7 +15,21 @@ new class extends Component {
     public $resultats = [];
     public $erreurs = [];
     public $traite = false;
-    public $stats = ['total' => 0, 'trouves' => 0, 'introuvables' => 0];
+    public $stats = ['total' => 0, 'trouves' => 0, 'introuvables' => 0, 'oui' => 0, 'proche' => 0, 'non' => 0];
+
+    /** Le fichier importé contient-il une colonne de nom ? */
+    public bool $avecNom = false;
+
+    /** Filtre d'affichage sur la comparaison des noms : '' | oui | proche | non */
+    public string $filtreNom = '';
+
+    /** Lignes affichées (et exportées) selon le filtre */
+    private function lignesFiltrees(): \Illuminate\Support\Collection
+    {
+        $rows = collect($this->resultats);
+
+        return $this->filtreNom === '' ? $rows : $rows->where('name_match', $this->filtreNom);
+    }
 
     public function updatedFichier()
     {
@@ -34,6 +49,7 @@ new class extends Component {
 
         $this->erreurs   = [];
         $this->resultats = [];
+        $this->filtreNom = '';
 
         try {
             $path = $this->fichier->getRealPath();
@@ -41,60 +57,55 @@ new class extends Component {
             $import = new \App\Imports\MsisdnImport();
             Excel::import($import, $path);
 
-            // Nettoie chaque MSISDN — on ne garde que les chiffres (retire espaces,
-            // tirets, éventuels préfixes "+"), pour un format identique à la base.
-            $msisdns = collect($import->getMsisdns())
-                ->map(fn($m) => preg_replace('/\D/', '', (string) $m))
-                ->filter(fn($m) => $m !== '')
-                ->unique()
+            $this->avecNom = $import->hasNameColumn();
+
+            // Une entrée par ligne du fichier (doublons compris). On ne garde que les
+            // chiffres du MSISDN (espaces, tirets, « + »), pour un format identique à la base.
+            $lignes = collect($import->getRows())
+                ->map(fn ($r) => array_merge($r, ['msisdn' => preg_replace('/\D/', '', $r['msisdn'])]))
+                ->filter(fn ($r) => $r['msisdn'] !== '')
                 ->values();
 
-            if ($msisdns->isEmpty()) {
+            if ($lignes->isEmpty()) {
                 $this->erreurs[] = 'Aucun MSISDN trouvé dans le fichier.';
                 return;
             }
 
-            // Recherche EXACTE et indexée : une seule requête whereIn.
+            // Recherche EXACTE et indexée : une seule requête whereIn sur les MSISDN uniques.
             // Bien plus rapide que des orWhere LIKE sur une grosse table KYC.
-            $found = Customer::whereIn('msisdn', $msisdns->all())
+            $found = Customer::whereIn('msisdn', $lignes->pluck('msisdn')->unique()->values()->all())
                 ->get()
                 ->keyBy('msisdn');   // clé = msisdn pour un accès O(1)
 
-            // Mapper chaque MSISDN importé vers le client trouvé
-            $this->resultats = $msisdns->map(function ($msisdn) use ($found) {
-                $customer = $found->get($msisdn);
-
-                if (!$customer) {
-                    return [
-                        'msisdn'           => $msisdn,
-                        'trouve'           => false,
-                        'source_datetime'  => null,
-                        'full_name'        => null,
-                        'mother_name'      => null,
-                        'customer_profile' => null,
-                        'channel'          => null,
-                        'id_type'          => null,
-                        'nationality'      => null,
-                    ];
-                }
+            $this->resultats = $lignes->map(function ($ligne) use ($found) {
+                $customer = $found->get($ligne['msisdn']);
+                $match    = NameMatcher::compare($ligne['file_name'], $customer?->full_name);
 
                 return [
-                    'msisdn'           => $msisdn,
-                    'trouve'           => true,
-                    'source_datetime'  => $customer->source_datetime,
-                    'full_name'        => $customer->full_name,
-                    'mother_name'      => $customer->mother_full_name,
-                    'customer_profile' => $customer->customer_profile,
-                    'channel'          => $customer->channel,
-                    'id_type'          => $customer->id_type,
-                    'nationality'      => $customer->nationality,
+                    'line'             => $ligne['line'],
+                    'msisdn'           => $ligne['msisdn'],
+                    'file_name'        => $ligne['file_name'] ?: null,
+                    'trouve'           => (bool) $customer,
+                    'source_datetime'  => $customer?->source_datetime,
+                    'full_name'        => $customer?->full_name,
+                    'mother_name'      => $customer?->mother_full_name,
+                    'customer_profile' => $customer?->customer_profile,
+                    'channel'          => $customer?->channel,
+                    'id_type'          => $customer?->id_type,
+                    'nationality'      => $customer?->nationality,
+                    'name_match'       => $match['match'],   // oui | proche | non | null
+                    'name_score'       => $match['score'],
                 ];
             })->toArray();
 
+            $rows = collect($this->resultats);
             $this->stats = [
-                'total'        => count($this->resultats),
-                'trouves'      => collect($this->resultats)->where('trouve', true)->count(),
-                'introuvables' => collect($this->resultats)->where('trouve', false)->count(),
+                'total'        => $rows->count(),
+                'trouves'      => $rows->where('trouve', true)->count(),
+                'introuvables' => $rows->where('trouve', false)->count(),
+                'oui'          => $rows->where('name_match', 'oui')->count(),
+                'proche'       => $rows->where('name_match', 'proche')->count(),
+                'non'          => $rows->where('name_match', 'non')->count(),
             ];
 
             $this->traite = true;
@@ -110,8 +121,8 @@ new class extends Component {
             return;
         }
 
-        $rows   = collect($this->resultats);
-        $export = new \App\Exports\MsisdnResultatsExport($rows);
+        // Exporte les lignes affichées (filtre « Même nom » appliqué)
+        $export = new \App\Exports\MsisdnResultatsExport($this->lignesFiltrees());
 
         return Excel::download(
             $export,
@@ -125,7 +136,14 @@ new class extends Component {
         $this->resultats  = [];
         $this->erreurs    = [];
         $this->traite     = false;
-        $this->stats      = ['total' => 0, 'trouves' => 0, 'introuvables' => 0];
+        $this->avecNom    = false;
+        $this->filtreNom  = '';
+        $this->stats      = ['total' => 0, 'trouves' => 0, 'introuvables' => 0, 'oui' => 0, 'proche' => 0, 'non' => 0];
+    }
+
+    public function with(): array
+    {
+        return ['lignes' => $this->lignesFiltrees()];
     }
 
 };
@@ -207,7 +225,10 @@ new class extends Component {
                 <p style="font-size:11px; font-weight:600; color:#1B2F6E; margin:0 0 3px;">Format attendu</p>
                 <p style="font-size:11px; color:#6b7280; margin:0;">
                     Le fichier doit contenir une colonne intitulée <strong>MSISDN</strong> (majuscule ou minuscule),
-                    au format complet <strong>253XXXXXXXX</strong>. Les autres colonnes sont ignorées.
+                    au format complet <strong>253XXXXXXXX</strong>.
+                    Ajoutez une colonne <strong>full_name</strong> (ou « Nom complet ») pour comparer le nom à celui de la base KYC :
+                    la comparaison ignore majuscules, accents et ponctuation, mais <strong>l'ordre des mots compte</strong>.
+                    Chaque ligne du fichier est vérifiée, doublons compris. Les autres colonnes sont ignorées.
                 </p>
             </div>
         </div>
@@ -238,11 +259,11 @@ new class extends Component {
     @if($traite)
 
         {{-- STATS --}}
-        <div style="display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; margin-bottom:16px;">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:16px;">
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #1B2F6E;">
                 <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Total importés</p>
                 <p style="font-size:24px; font-weight:700; color:#111827; margin:0;">{{ $stats['total'] }}</p>
-                <p style="font-size:10px; color:#9ca3af; margin:3px 0 0;">MSISDN uniques</p>
+                <p style="font-size:10px; color:#9ca3af; margin:3px 0 0;">Lignes du fichier</p>
             </div>
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #16a34a;">
                 <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Trouvés</p>
@@ -254,12 +275,36 @@ new class extends Component {
                 <p style="font-size:24px; font-weight:700; color:#E24B4A; margin:0;">{{ $stats['introuvables'] }}</p>
                 <p style="font-size:10px; color:#9ca3af; margin:3px 0 0;">Non enregistrés</p>
             </div>
+            <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #F5A800;">
+                <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Comparaison des noms</p>
+                @if($avecNom)
+                    <p style="font-size:13px; margin:0; line-height:1.7;">
+                        <strong style="color:#005C2B;">{{ $stats['oui'] }}</strong> <span style="color:#6b7280;">identique(s)</span><br>
+                        <strong style="color:#92400E;">{{ $stats['proche'] }}</strong> <span style="color:#6b7280;">proche(s)</span><br>
+                        <strong style="color:#B91C1C;">{{ $stats['non'] }}</strong> <span style="color:#6b7280;">différent(s)</span>
+                    </p>
+                @else
+                    <p style="font-size:11px; color:#9ca3af; margin:0;">Pas de colonne <strong>full_name</strong> dans le fichier : aucune comparaison.</p>
+                @endif
+            </div>
         </div>
 
         {{-- TABLEAU RÉSULTATS --}}
         <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden;">
-            <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; justify-content:space-between;">
-                <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">Résultats</p>
+            <div style="padding:12px 16px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                    <p style="font-size:13px; font-weight:600; color:#111827; margin:0;">Résultats <span style="color:#9ca3af; font-weight:500;">({{ $lignes->count() }})</span></p>
+                    @if($avecNom)
+                        <div style="display:flex; gap:2px; background:#F4F6FB; padding:3px; border-radius:8px; border:1px solid #e5e7eb;">
+                            @foreach(['' => 'Tous', 'non' => 'Non', 'proche' => 'Proche', 'oui' => 'Oui'] as $val => $label)
+                                <button wire:click="$set('filtreNom', '{{ $val }}')"
+                                        style="font-size:11px; font-weight:600; padding:5px 10px; border-radius:6px; border:none; cursor:pointer; {{ $filtreNom === $val ? 'background:#1B2F6E; color:#fff;' : 'background:transparent; color:#6b7280;' }}">
+                                    {{ $label }}{{ $val !== '' ? ' (' . $stats[$val] . ')' : '' }}
+                                </button>
+                            @endforeach
+                        </div>
+                    @endif
+                </div>
                 <button onclick="exporterResultats()"
                         style="background:#fff; color:#1B2F6E; font-size:12px; font-weight:600; padding:7px 14px; border-radius:7px; border:1.5px solid #1B2F6E; cursor:pointer; display:flex; align-items:center; gap:6px;">
                     <svg width="13" height="13" viewBox="0 0 16 16" fill="#1B2F6E">
@@ -274,11 +319,17 @@ new class extends Component {
                 <table style="width:100%; border-collapse:collapse; font-size:12px;">
                     <thead>
                         <tr style="background:#F7F8FC;">
-                            <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">#</th>
+                            <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;" title="Numéro de ligne dans le fichier importé">Ligne</th>
                             <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">MSISDN</th>
                             <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">Statut recherche</th>
                             <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">Date</th>
-                            <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">Nom complet</th>
+                            @if($avecNom)
+                                <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">Nom (fichier)</th>
+                            @endif
+                            <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">{{ $avecNom ? 'Nom (base KYC)' : 'Nom complet' }}</th>
+                            @if($avecNom)
+                                <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">Même nom</th>
+                            @endif
                             <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">Nom de la mère</th>
                             <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">Profil</th>
                             <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">Canal</th>
@@ -286,11 +337,11 @@ new class extends Component {
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach($resultats as $i => $row)
-                            <tr style="border-bottom:1px solid #f3f4f6;"
+                        @forelse($lignes as $row)
+                            <tr wire:key="ligne-{{ $row['line'] }}" style="border-bottom:1px solid #f3f4f6;"
                                 onmouseover="this.style.background='#F7F8FC'"
                                 onmouseout="this.style.background='transparent'">
-                                <td style="padding:10px 14px; color:#9ca3af;">{{ $i + 1 }}</td>
+                                <td style="padding:10px 14px; color:#9ca3af;">{{ $row['line'] }}</td>
                                 <td style="padding:10px 14px; font-weight:600; color:#111827;">{{ $row['msisdn'] }}</td>
                                 <td style="padding:10px 14px;">
                                     @if($row['trouve'])
@@ -302,7 +353,23 @@ new class extends Component {
                                 <td style="padding:10px 14px; color:#6b7280;">
                                     {{ $row['source_datetime'] ? \Carbon\Carbon::parse($row['source_datetime'])->format('d/m/Y H:i') : '—' }}
                                 </td>
+                                @if($avecNom)
+                                    <td style="padding:10px 14px; color:#374151;">{{ $row['file_name'] ?: '—' }}</td>
+                                @endif
                                 <td style="padding:10px 14px; color:#374151;">{{ $row['full_name'] ?: '—' }}</td>
+                                @if($avecNom)
+                                    <td style="padding:10px 14px; white-space:nowrap;">
+                                        @if($row['name_match'] === 'oui')
+                                            <span style="background:#E5F5ED; color:#005C2B; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">✓ Oui</span>
+                                        @elseif($row['name_match'] === 'proche')
+                                            <span style="background:#FEF3C7; color:#92400E; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">≈ Proche · {{ $row['name_score'] }} %</span>
+                                        @elseif($row['name_match'] === 'non')
+                                            <span style="background:#FDECEA; color:#7F1D1D; font-size:10px; font-weight:600; padding:2px 8px; border-radius:12px;">✗ Non · {{ $row['name_score'] }} %</span>
+                                        @else
+                                            <span style="color:#9ca3af;" title="MSISDN introuvable ou nom absent">—</span>
+                                        @endif
+                                    </td>
+                                @endif
                                 <td style="padding:10px 14px; color:#374151;">{{ $row['mother_name'] ?: '—' }}</td>
                                 <td style="padding:10px 14px;">
                                     @if($row['trouve'] && $row['customer_profile'])
@@ -320,7 +387,9 @@ new class extends Component {
                                 <td style="padding:10px 14px; color:#374151;">{{ $row['channel'] ?: '—' }}</td>
                                 <td style="padding:10px 14px; color:#374151;">{{ $row['id_type'] ?: '—' }}</td>
                             </tr>
-                        @endforeach
+                        @empty
+                            <tr><td colspan="12" style="padding:24px; text-align:center; color:#9ca3af;">Aucune ligne pour ce filtre.</td></tr>
+                        @endforelse
                     </tbody>
                 </table>
             </div>
