@@ -110,6 +110,7 @@ new class extends Component {
 
         // Les exports déjà téléchargés (uploaded) ou en échec ne sont pas affichés
         $myExports = ExportRequest::where('user_id', auth()->id())
+            ->where('source', 'transactions')
             ->whereIn('status', ['pending', 'processing', 'done'])
             ->latest()
             ->limit(5)

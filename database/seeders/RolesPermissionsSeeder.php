@@ -32,6 +32,7 @@ class RolesPermissionsSeeder extends Seeder
             'aml.alerts.view', 'aml.alerts.manage', 'aml.rules.manage', 'aml.watchlist.manage',
             'tools.qrcode',
             'dashboard.admin',
+            'finance.bill-payments.view',
         ];
 
         foreach ($permissions as $perm) {

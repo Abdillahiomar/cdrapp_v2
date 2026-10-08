@@ -161,6 +161,20 @@
             </a>
         @endcan
 
+        @can('finance.bill-payments.view')
+            <a href="{{ route('bill-payments.index') }}" wire:navigate
+               style="{{ request()->routeIs('bill-payments.*') ? $linkActive : $linkInactive }}">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
+                    <path d="M3 1.5h10v13l-2-1.2-1.5 1.2L8 13.3l-1.5 1.2L5 13.3l-2 1.2z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                    <path d="M5.5 5h5M5.5 7.5h5M5.5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                </svg>
+                Paiements de factures
+                @if(request()->routeIs('bill-payments.*'))
+                    <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
+                @endif
+            </a>
+        @endcan
+
         {{-- ── OPÉRATIONS ── --}}
         @canany(['operations.import-msisdn', 'tools.qrcode'])
             <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Opérations</p>

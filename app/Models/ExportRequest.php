@@ -11,8 +11,10 @@ class ExportRequest extends Model
     protected $fillable = [
         'user_id',
         'type',
+        'source',
         'status',
         'filters',
+        'columns',
         'file_path',
         'total_rows',
         'error',
@@ -23,6 +25,7 @@ class ExportRequest extends Model
 
     protected $casts = [
         'filters'       => 'array',
+        'columns'       => 'array',
         'completed_at'  => 'datetime',
         'downloaded_at' => 'datetime',
         'deleted_at'    => 'datetime',
@@ -35,9 +38,10 @@ class ExportRequest extends Model
 
     public function fileName(): string
     {
-        $ext = $this->type === 'excel' ? 'xlsx' : 'csv';
+        $ext    = $this->type === 'excel' ? 'xlsx' : 'csv';
+        $prefix = $this->source === 'bill_payments' ? 'paiements_factures_' : 'transactions_';
 
-        return 'transactions_' . $this->created_at->format('Ymd_His') . '.' . $ext;
+        return $prefix . $this->created_at->format('Ymd_His') . '.' . $ext;
     }
 
     /**
