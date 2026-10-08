@@ -43,7 +43,7 @@ new class extends Component {
         $this->types      = array_map('strval', array_keys(BillPayments::types()));
     }
 
-    public function search(): void
+    public function runSearch(): void
     {
         $this->validate([
             'date_debut' => 'required|date',
@@ -268,7 +268,7 @@ new class extends Component {
             </div>
             <div style="flex:1; min-width:240px;">
                 <label style="{{ $labelStyle }}">Client, shortcode, transaction ID ou référence</label>
-                <input type="text" wire:model="search" wire:keydown.enter="search" placeholder="Ex. 25377XXXXXX, 1298, 000419…, référence facture"
+                <input type="text" wire:model="search" wire:keydown.enter="runSearch" placeholder="Ex. 25377XXXXXX, 1298, 000419…, référence facture"
                        style="{{ $inputStyle }} width:100%; box-sizing:border-box;">
             </div>
         </div>
@@ -291,10 +291,10 @@ new class extends Component {
         </div>
 
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button wire:click="search"
+            <button wire:click="runSearch"
                     style="background:#00843D; color:#fff; font-size:13px; font-weight:600; padding:9px 20px; border-radius:8px; border:none; cursor:pointer;">
-                <span wire:loading.remove wire:target="search">Rechercher</span>
-                <span wire:loading wire:target="search">Recherche…</span>
+                <span wire:loading.remove wire:target="runSearch">Rechercher</span>
+                <span wire:loading wire:target="runSearch">Recherche…</span>
             </button>
             <button wire:click="resetFilters"
                     style="background:#f3f4f6; color:#374151; font-size:13px; font-weight:600; padding:9px 16px; border-radius:8px; border:1px solid #d1d5db; cursor:pointer;">
