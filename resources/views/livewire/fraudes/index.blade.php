@@ -165,8 +165,19 @@ new class extends Component {
             ->map(fn ($group) => $group->first());
 
         $chainsInfo = DB::table('transaction_chains')
-            ->selectRaw('MAX(activity_date) as last_activity_date, MAX(created_at) as last_run_at, COUNT(*) as total_chains')
+            ->selectRaw('MAX(activity_date) as last_activity_date, COUNT(*) as total_chains, COUNT(DISTINCT activity_date) as total_weeks')
             ->first();
+
+        // Nombre de chaînes et date de calcul de la dernière semaine (et non de toute la table)
+        if ($chainsInfo && $chainsInfo->last_activity_date) {
+            $lastWeek = DB::table('transaction_chains')
+                ->where('activity_date', $chainsInfo->last_activity_date)
+                ->selectRaw('COUNT(*) as week_chains, MAX(created_at) as last_run_at')
+                ->first();
+
+            $chainsInfo->week_chains = $lastWeek->week_chains;
+            $chainsInfo->last_run_at = $lastWeek->last_run_at;
+        }
 
         return [
             's1' => $runs->get('agent_customer_daily_activity'),
@@ -295,12 +306,23 @@ new class extends Component {
 
         <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px 16px;">
             <p style="font-size:10px; color:#9ca3af; margin:0 0 4px; text-transform:uppercase; letter-spacing:0.5px;">S3 — Chaînes (hebdomadaire)</p>
-            @if($processingStatus['s3'] && $processingStatus['s3']->last_run_at)
+            @if($processingStatus['s3'] && $processingStatus['s3']->last_activity_date)
+                @php
+                    $s3       = $processingStatus['s3'];
+                    $s3Start  = \Carbon\Carbon::parse($s3->last_activity_date);
+                @endphp
+                {{-- activity_date = samedi de début ; la semaine va jusqu'au vendredi suivant inclus --}}
                 <p style="font-size:12px; color:#111827; margin:0;">
-                    Semaine du {{ \Carbon\Carbon::parse($processingStatus['s3']->last_activity_date)->format('d/m/Y') }}
+                    Semaine du {{ $s3Start->format('d/m/Y') }} au {{ $s3Start->copy()->addDays(6)->format('d/m/Y') }}
                 </p>
-                <p style="font-size:11px; color:#9ca3af; margin:4px 0 0;">
-                    {{ number_format($processingStatus['s3']->total_chains, 0, ',', ' ') }} chaînes au total — calculées le {{ \Carbon\Carbon::parse($processingStatus['s3']->last_run_at)->format('d/m/Y H:i') }}
+                <p style="font-size:11px; color:#6b7280; margin:4px 0 0;">
+                    <strong style="color:#111827;">{{ number_format($s3->week_chains, 0, ',', ' ') }}</strong> chaînes cette semaine
+                    @if($s3->last_run_at)
+                        — calculées le {{ \Carbon\Carbon::parse($s3->last_run_at)->format('d/m/Y H:i') }}
+                    @endif
+                </p>
+                <p style="font-size:10px; color:#9ca3af; margin:2px 0 0;">
+                    {{ number_format($s3->total_chains, 0, ',', ' ') }} au total sur {{ $s3->total_weeks }} semaine(s) calculée(s)
                 </p>
             @else
                 <p style="font-size:12px; color:#9ca3af; margin:0;">Aucune chaîne calculée.</p>

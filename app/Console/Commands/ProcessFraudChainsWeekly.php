@@ -352,7 +352,7 @@ inserted_chains AS (
         EXTRACT(EPOCH FROM (cur_time - initial_time))::bigint,
         ROUND(cur_amount::numeric / NULLIF(initial_amount::numeric, 0), 4),
         cur_type,
-        NOW()
+        CAST(:created_at AS timestamp)
     FROM completed
     RETURNING {$pk} AS new_chain_id, initial_transaction_id
 ),
@@ -398,6 +398,8 @@ SQL;
                 'end_anchor'    => $end,
                 'end_rec'       => $end,
                 'activity_date' => $activityDate,
+                // Heure de l'application, pas NOW() : l'horloge du serveur PostgreSQL n'est pas fiable
+                'created_at'    => now()->format('Y-m-d H:i:s'),
             ]);
 
             return [(int) $result->chains, (int) $result->members];
