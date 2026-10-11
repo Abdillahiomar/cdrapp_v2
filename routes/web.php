@@ -15,7 +15,7 @@ Route::view('/', 'welcome');
 Volt::route('/customers', 'customers.index')->name('customers.index');
 Volt::route('/transactions', 'transactions.index')->name('transactions.index');
 
-Volt::route('/summary', 'transactions.summary')->name('transactions.summary')->middleware('auth');
+Volt::route('/summary', 'transactions.summary')->name('transactions.summary')->middleware(['auth', 'permission:transactions.summary.view']);
 
 Volt::route('/manager_dashboard', 'dashboard.manager_dashboard')->name('dashboard.manager')->middleware(['auth', 'permission:dashboard.admin']);
 Volt::route('/dashboard', 'dashboard.index')->name('dashboard.index');
