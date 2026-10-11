@@ -33,6 +33,7 @@ class RolesPermissionsSeeder extends Seeder
             'tools.qrcode',
             'dashboard.admin',
             'finance.bill-payments.view',
+            'pca.view', 'pca.cashout', 'pca.manage',
         ];
 
         foreach ($permissions as $perm) {

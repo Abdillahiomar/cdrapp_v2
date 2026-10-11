@@ -38,7 +38,8 @@ Volt::route('/all_accounts_balance', 'revenue.balance')->name('balances')->middl
 
 Volt::route('finance/banks-accounts', 'finance.banks-accounts')->name('finance.banks-accounts');
 Volt::route('finance/bank-balances', 'finance.bank-balances')->name('finance.bank-balances');
-Volt::route('/paiements-factures', 'transactions.bill_payments')->name('bill-payments.index')->middleware(['auth', 'permission:finance.bill-payments.view']);
+Volt::route('/pca', 'pca.index')->name('pca.index')->middleware(['auth', 'permission:pca.view']);
+Volt::route('/paiements-factures','transactions.bill_payments')->name('bill-payments.index')->middleware(['auth', 'permission:finance.bill-payments.view']);
 
 Volt::route('/amana_report', 'amana_report.index')->name('amana_report.index')->middleware('auth');
 Volt::route('/ancien_cdrapp', 'transactions.old_transactions')->name('ancien_cdrapp')->middleware('auth');

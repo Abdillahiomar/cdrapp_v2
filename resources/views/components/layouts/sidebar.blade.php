@@ -247,10 +247,26 @@
 
         {{--  Fraude and AML Section --}}
 
-        @canany(['fraudes.view', 'aml.alerts.view'])
+        @canany(['fraudes.view', 'aml.alerts.view', 'pca.view'])
            <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">
             AML & Détection de Fraude</p>
         @endcanany
+
+        @can('pca.view')
+            {{-- rescue : le menu s'affiche sur toutes les pages, il ne doit pas casser si la table n'existe pas encore --}}
+            @php $pcaActive = rescue(fn () => \App\Models\PcaIncident::whereNull('ended_at')->exists(), false, false); @endphp
+            <a href="{{ route('pca.index') }}" wire:navigate
+               style="{{ request()->routeIs('pca.*') ? $linkActive : $linkInactive }}">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
+                    <path d="M8 1.5l5.5 2v4c0 3.4-2.3 6-5.5 7-3.2-1-5.5-3.6-5.5-7v-4z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                    <path d="M5.8 8l1.6 1.6 3-3.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                PCA — Soldes
+                @if($pcaActive)
+                    <span style="margin-left:auto; background:#ef4444; color:#fff; font-size:9px; font-weight:700; padding:1px 6px; border-radius:8px; flex-shrink:0;">ACTIF</span>
+                @endif
+            </a>
+        @endcan
 
         @can('aml.alerts.view')
             @php $amlNewAlerts = \App\Models\AmlAlert::newCount(); @endphp
