@@ -39,7 +39,13 @@ class ExportRequest extends Model
     public function fileName(): string
     {
         $ext    = $this->type === 'excel' ? 'xlsx' : 'csv';
-        $prefix = $this->source === 'bill_payments' ? 'paiements_factures_' : 'transactions_';
+        $prefix = match ($this->source) {
+            'bill_payments' => 'paiements_factures_',
+            'fraud_chains'      => 'chaines_fraude_',
+            'fraud_commission'  => 'commission_indue_',
+            'fraud_structuring' => 'structuring_',
+            default         => 'transactions_',
+        };
 
         return $prefix . $this->created_at->format('Ymd_His') . '.' . $ext;
     }

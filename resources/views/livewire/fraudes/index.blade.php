@@ -1,8 +1,13 @@
 <?php
 
+use App\Jobs\GenerateFraudExport;
+use App\Models\ExportRequest;
+use App\Support\FraudChains;
+use App\Support\FraudReports;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Carbon\Carbon;
 
 new class extends Component {
@@ -32,6 +37,24 @@ new class extends Component {
     public ?int  $chain_expanded_id = null;
     public array $chain_members     = [];
 
+    /**
+     * Filtres de la dernière analyse de chaque section : le tableau affiché et
+     * l'export utilisent le même instantané, même si les champs ont changé depuis.
+     */
+    public array $comm_applied   = [];
+    public array $struct_applied = [];
+    public array $chain_applied  = [];
+
+    /** Format d'export choisi par section : excel | csv */
+    public array $export_types = ['commission' => 'excel', 'structuring' => 'excel', 'chains' => 'excel'];
+
+    /** Section de la page → source ExportRequest */
+    private const EXPORT_SOURCES = [
+        'commission'  => 'fraud_commission',
+        'structuring' => 'fraud_structuring',
+        'chains'      => 'fraud_chains',
+    ];
+
     public function mount(): void
     {
         $this->comm_date_debut = Carbon::now()->subDays(7)->format('Y-m-d');
@@ -44,15 +67,27 @@ new class extends Component {
         $this->chain_date_fin   = Carbon::now()->format('Y-m-d');
     }
 
+    private function commFilters(): array
+    {
+        return ['date_debut' => $this->comm_date_debut, 'date_fin' => $this->comm_date_fin, 'min_cashin' => max(2, (int) $this->comm_min_cashin)];
+    }
+
+    private function structFilters(): array
+    {
+        return ['date_debut' => $this->struct_date_debut, 'date_fin' => $this->struct_date_fin, 'min_agents' => max(2, (int) $this->struct_min_agents)];
+    }
+
     public function analyserCommission(): void
     {
         $this->comm_searched = true;
+        $this->comm_applied  = $this->commFilters();
         $this->resetPage('commissionPage');
     }
 
     public function analyserStructuring(): void
     {
         $this->struct_searched            = true;
+        $this->struct_applied             = $this->structFilters();
         $this->struct_expanded_customer   = null;
         $this->struct_detail              = [];
         $this->resetPage('structPage');
@@ -63,7 +98,58 @@ new class extends Component {
         $this->chain_searched      = true;
         $this->chain_expanded_id   = null;
         $this->chain_members       = [];
+        $this->chain_applied       = ['date_debut' => $this->chain_date_debut, 'date_fin' => $this->chain_date_fin];
         $this->resetPage('chainPage');
+    }
+
+    /**
+     * Export d'une section (commission | structuring | chains) avec les filtres de
+     * sa dernière analyse, en file d'attente (même circuit que les autres exports).
+     */
+    public function exportSection(string $section): void
+    {
+        $filters = match ($section) {
+            'commission'  => $this->comm_applied,
+            'structuring' => $this->struct_applied,
+            'chains'      => $this->chain_applied,
+            default       => [],
+        };
+
+        if (empty($filters)) {
+            return;
+        }
+
+        $request = ExportRequest::create([
+            'user_id' => auth()->id(),
+            'type'    => ($this->export_types[$section] ?? 'excel') === 'csv' ? 'csv' : 'excel',
+            'source'  => self::EXPORT_SOURCES[$section],
+            'status'  => 'pending',
+            'filters' => $filters,
+        ]);
+
+        GenerateFraudExport::dispatch($request);
+
+        session()->flash("export-message-{$section}", 'Export ' . strtoupper($request->type) . ' lancé : il apparaîtra ci-dessous dès qu\'il sera prêt.');
+    }
+
+    public function downloadFraudExport(int $exportId)
+    {
+        $export = ExportRequest::where('user_id', auth()->id())
+            ->whereIn('source', self::EXPORT_SOURCES)
+            ->findOrFail($exportId);
+
+        $section = array_search($export->source, self::EXPORT_SOURCES, true);
+
+        if (!in_array($export->status, ['done', 'uploaded']) || !$export->file_path || !Storage::disk('local')->exists($export->file_path)) {
+            session()->flash("export-error-{$section}", "Ce fichier n'est plus disponible.");
+            return null;
+        }
+
+        if ($export->status === 'done') {
+            $export->update(['status' => 'uploaded', 'downloaded_at' => now()]);
+        }
+
+        return response()->download(Storage::disk('local')->path($export->file_path), $export->fileName());
     }
 
     /**
@@ -117,6 +203,15 @@ new class extends Component {
             'structuring'      => $this->getStructuring(),
             'chains'           => $this->getChains(),
             'agentSummary'     => $this->getAgentSummary(),
+            // 5 derniers exports par section, regroupés par source
+            'myExports'        => ExportRequest::where('user_id', auth()->id())
+                ->whereIn('source', self::EXPORT_SOURCES)
+                ->whereIn('status', ['pending', 'processing', 'done'])
+                ->latest()
+                ->limit(30)
+                ->get()
+                ->groupBy('source')
+                ->map(fn ($g) => $g->take(5)),
         ];
     }
 
@@ -134,19 +229,7 @@ new class extends Component {
             return null;
         }
 
-        $debut = $this->comm_date_debut . ' 00:00:00';
-        $fin   = $this->comm_date_fin   . ' 23:59:59';
-
-        return DB::table('fraud_transactions')
-            ->select('debited_msisdn as agent_id', 'credited_msisdn as customer_id')
-            ->selectRaw('COUNT(*) as nb_cashin')
-            ->selectRaw('COALESCE(SUM(amount), 0) as total_amount')
-            ->selectRaw('COALESCE(SUM(commission), 0) as total_commission')
-            ->where('transaction_type', 'Customer Cash In')
-            ->whereBetween('transaction_time', [$debut, $fin])
-            ->groupBy('debited_msisdn', 'credited_msisdn')
-            ->havingRaw('COUNT(*) >= ?', [$this->comm_min_cashin])
-            ->orderByDesc('total_commission')
+        return FraudReports::commission($this->comm_applied ?: $this->commFilters())
             ->paginate(20, ['*'], 'commissionPage');
     }
 
@@ -192,11 +275,7 @@ new class extends Component {
             return null;
         }
 
-        return DB::table('customer_multi_agent_daily')
-            ->whereBetween('activity_date', [$this->struct_date_debut, $this->struct_date_fin])
-            ->where('unique_agents', '>=', $this->struct_min_agents)
-            ->orderByDesc('unique_agents')
-            ->orderByDesc('total_cashin_amount')
+        return FraudReports::structuring($this->struct_applied ?: $this->structFilters())
             ->paginate(20, ['*'], 'structPage');
     }
 
@@ -206,10 +285,10 @@ new class extends Component {
             return null;
         }
 
-        return DB::table('transaction_chains')
-            ->whereBetween('activity_date', [$this->chain_date_debut, $this->chain_date_fin])
-            ->orderByDesc('amount_retention_ratio')
-            ->orderByDesc('send_money_hops')
+        // started_at = heure du Cash In initial (activity_date n'est que le samedi de la semaine)
+        return FraudChains::chains($this->chain_applied ?: ['date_debut' => $this->chain_date_debut, 'date_fin' => $this->chain_date_fin])
+            ->orderByDesc('c.amount_retention_ratio')
+            ->orderByDesc('c.send_money_hops')
             ->paginate(20, ['*'], 'chainPage');
     }
 
@@ -355,7 +434,19 @@ new class extends Component {
                     style="background:#00843D; color:#fff; font-size:13px; font-weight:600; padding:9px 22px; border-radius:8px; border:none; cursor:pointer;">
                 Analyser
             </button>
+
+            @include('livewire.fraudes.partials.export-button', [
+                'section' => 'commission',
+                'applied' => $comm_searched ? $comm_applied : [],
+                'formats' => ['excel' => 'Excel', 'csv' => 'CSV'],
+            ])
         </div>
+
+        @include('livewire.fraudes.partials.export-list', [
+            'section' => 'commission',
+            'exports' => $myExports->get('fraud_commission', collect()),
+            'title'   => 'Mes exports — commission indue',
+        ])
 
         @if($comm_searched)
             @if($commissionIndue->isEmpty())
@@ -424,7 +515,19 @@ new class extends Component {
                     style="background:#00843D; color:#fff; font-size:13px; font-weight:600; padding:9px 22px; border-radius:8px; border:none; cursor:pointer;">
                 Analyser
             </button>
+
+            @include('livewire.fraudes.partials.export-button', [
+                'section' => 'structuring',
+                'applied' => $struct_searched ? $struct_applied : [],
+                'formats' => ['excel' => 'Excel — 2 onglets (Clients + Détail par agent)', 'csv' => 'CSV — une ligne par agent'],
+            ])
         </div>
+
+        @include('livewire.fraudes.partials.export-list', [
+            'section' => 'structuring',
+            'exports' => $myExports->get('fraud_structuring', collect()),
+            'title'   => 'Mes exports — structuring',
+        ])
 
         @if($struct_searched)
             @if($structuring->isEmpty())
@@ -512,7 +615,19 @@ new class extends Component {
                     style="background:#00843D; color:#fff; font-size:13px; font-weight:600; padding:9px 22px; border-radius:8px; border:none; cursor:pointer;">
                 Analyser
             </button>
+
+            @include('livewire.fraudes.partials.export-button', [
+                'section' => 'chains',
+                'applied' => $chain_searched ? $chain_applied : [],
+                'formats' => ['excel' => 'Excel — 2 onglets (Chaînes + Transactions)', 'csv' => 'CSV — une ligne par transaction'],
+            ])
         </div>
+
+        @include('livewire.fraudes.partials.export-list', [
+            'section' => 'chains',
+            'exports' => $myExports->get('fraud_chains', collect()),
+            'title'   => 'Mes exports de chaînes',
+        ])
 
         @if($chain_searched)
             @if($chains->isEmpty())
@@ -525,7 +640,7 @@ new class extends Component {
                         <thead>
                             <tr style="background:#F7F8FC;">
                                 <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;"></th>
-                                <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Date</th>
+                                <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;" title="Date et heure du Cash In qui démarre la chaîne">Début (Cash In)</th>
                                 <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Agent origine</th>
                                 <th style="padding:10px 14px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Client origine</th>
                                 <th style="padding:10px 14px; text-align:right; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Montant initial</th>
@@ -547,7 +662,7 @@ new class extends Component {
                                     <td style="padding:10px 14px; color:#9ca3af;">
                                         {{ $chain_expanded_id === $chain->chain_id ? '▾' : '▸' }}
                                     </td>
-                                    <td style="padding:10px 14px; color:#6b7280;">{{ \Carbon\Carbon::parse($chain->activity_date)->format('d/m/Y') }}</td>
+                                    <td style="padding:10px 14px; color:#6b7280; white-space:nowrap;">{{ \Carbon\Carbon::parse($chain->started_at)->format('d/m/Y H:i') }}</td>
                                     <td style="padding:10px 14px; color:#111827;">{{ $chain->origin_agent_id }}</td>
                                     <td style="padding:10px 14px; color:#111827;">{{ $chain->origin_customer_id }}</td>
                                     <td style="padding:10px 14px; text-align:right; color:#6b7280;">{{ number_format($chain->initial_amount*100, 0, ',', ' ') }}</td>
