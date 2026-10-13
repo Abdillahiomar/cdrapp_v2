@@ -328,10 +328,9 @@ new class extends Component {
              style="position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:998;"></div>
 
         <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
-                    width:min(520px,95vw); background:#fff; border-radius:14px; z-index:999;
-                    box-shadow:0 20px 60px rgba(0,0,0,0.2);">
+                    width:min(560px,95vw); max-height:calc(100vh - 40px); display:flex; flex-direction:column; background:#fff; border-radius:14px; z-index:999; box-shadow:0 20px 60px rgba(0,0,0,0.2);">
 
-            <div style="padding:16px 20px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; justify-content:space-between;">
+            <div style="padding:16px 20px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
                 <div>
                     <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">Rôle, département et agence</p>
                     <p style="font-size:11px; color:#9ca3af; margin:2px 0 0;">{{ $editUserName }} — {{ $editUserEmail }}</p>
@@ -344,7 +343,7 @@ new class extends Component {
                 </button>
             </div>
 
-            <div style="padding:20px;">
+            <div style="padding:20px; overflow-y:auto; flex:1 1 auto; min-height:0;">
 
                 <div style="margin-bottom:16px;">
                     <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:6px; font-weight:600;">
@@ -380,7 +379,7 @@ new class extends Component {
                     <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:6px; font-weight:600;">
                         Rôle <span style="color:#E24B4A;">*</span>
                     </label>
-                    <div style="display:flex; flex-direction:column; gap:8px;">
+                    <div style="display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px;">
                         @foreach($roles as $role)
                             @php
                                 $roleColors = [
@@ -420,7 +419,7 @@ new class extends Component {
 
             </div>
 
-            <div style="padding:12px 20px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-end; gap:10px;">
+            <div style="padding:12px 20px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-end; gap:10px; flex-shrink:0;">
                 <button wire:click="fermerModal"
                         style="background:#f3f4f6; color:#374151; font-size:13px; font-weight:500; padding:8px 20px; border-radius:8px; border:1px solid #e5e7eb; cursor:pointer;">
                     Annuler
@@ -443,10 +442,9 @@ new class extends Component {
          style="position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:998;"></div>
 
     <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
-                width:min(520px,95vw); background:#fff; border-radius:14px; z-index:999;
-                box-shadow:0 20px 60px rgba(0,0,0,0.2);">
+                width:min(560px,95vw); max-height:calc(100vh - 40px); display:flex; flex-direction:column; background:#fff; border-radius:14px; z-index:999; box-shadow:0 20px 60px rgba(0,0,0,0.2);">
 
-        <div style="padding:16px 20px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; justify-content:space-between;">
+        <div style="padding:16px 20px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
             <div>
                 <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">Nouvel utilisateur</p>
                 <p style="font-size:11px; color:#9ca3af; margin:2px 0 0;">Créez un compte et attribuez un rôle.</p>
@@ -459,7 +457,7 @@ new class extends Component {
             </button>
         </div>
 
-        <div style="padding:20px; display:flex; flex-direction:column; gap:14px;">
+        <div style="padding:20px; display:flex; flex-direction:column; gap:14px; overflow-y:auto; flex:1 1 auto; min-height:0;">
 
             <div>
                 <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px; font-weight:600;">
@@ -537,7 +535,7 @@ new class extends Component {
 
         </div>
 
-        <div style="padding:12px 20px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-end; gap:10px;">
+        <div style="padding:12px 20px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-end; gap:10px; flex-shrink:0;">
             <button wire:click="fermerCreateModal"
                     style="background:#f3f4f6; color:#374151; font-size:13px; font-weight:500; padding:8px 20px; border-radius:8px; border:1px solid #e5e7eb; cursor:pointer;">
                 Annuler
