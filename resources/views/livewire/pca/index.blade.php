@@ -34,7 +34,6 @@ new class extends Component {
     // ── Saisie d'un cash-out ──
     public string $coAccount  = '';
     public string $coAmount   = '';
-    public string $coLocation = '';
     public string $coDocument = '';
     public string $coNotes    = '';
 
@@ -44,6 +43,7 @@ new class extends Component {
 
     // ── Incident ──
     public string $incidentTitle = '';
+    public string $filterAgency  = '';
     public string $closeNotes    = '';
 
     // ── Import Huawei ──
@@ -64,6 +64,11 @@ new class extends Component {
         $this->emailDaily      = PcaSetting::get('email_daily') === '1';
         $this->emailNonZero    = PcaSetting::get('email_nonzero_only', '1') === '1';
         $this->huaweiAsOf      = now()->format('Y-m-d\TH:i');
+    }
+
+    public function updatedFilterAgency(): void
+    {
+        $this->resetPage();
     }
 
     public function setTab(string $tab): void
@@ -95,7 +100,7 @@ new class extends Component {
         $this->partyId   = $partyId;
         $this->partyType = $partyType;
         $this->coAccount = PcaBalance::MAIN_ACCOUNTS[$partyType] ?? '';
-        $this->reset(['coAmount', 'coLocation', 'coNotes', 'cancelId', 'cancelReason']);
+        $this->reset(['coAmount', 'coNotes', 'cancelId', 'cancelReason']);
         $this->resetErrorBag();
 
         $identity          = PcaBalances::identity($partyId, $partyType);
@@ -123,22 +128,29 @@ new class extends Component {
             return;
         }
 
+        // L'agence est celle de l'utilisateur connecté, jamais saisie
+        $agency = auth()->user()->agency;
+        if (!$agency || !$agency->is_active) {
+            $this->addError('coAmount', $agency
+                ? "Votre agence ({$agency->label()}) est désactivée : contactez l'administrateur."
+                : 'Votre compte n\'est rattaché à aucune agence : contactez l\'administrateur.');
+            return;
+        }
+
         $this->validate([
             'coAccount'  => 'required|string',
             'coAmount'   => 'required|numeric|min:1',
-            'coLocation' => 'required|string|min:2|max:255',
             'coDocument' => 'required|string|min:3|max:255',
             'coNotes'    => 'nullable|string|max:1000',
         ], [
             'coAmount.required'   => 'Indiquez le montant payé.',
             'coAmount.min'        => 'Le montant doit être supérieur à 0.',
-            'coLocation.required' => 'Indiquez l\'agence ou l\'agent qui paie.',
             'coDocument.required' => 'Indiquez la pièce d\'identité vérifiée.',
         ]);
 
         $amount = round((float) $this->coAmount, 2);
 
-        $result = DB::transaction(function () use ($incident, $amount) {
+        $result = DB::transaction(function () use ($incident, $amount, $agency) {
             $balance = PcaBalance::where('party_id', $this->partyId)
                 ->where('party_type', $this->partyType)
                 ->where('account_type', $this->coAccount)
@@ -169,7 +181,8 @@ new class extends Component {
                 'account_type'     => $this->coAccount,
                 'amount'           => $amount,
                 'available_before' => $available,
-                'location'         => $this->coLocation,
+                'agency_id'        => $agency->id,
+                'location'         => $agency->label(),   // copie du nom au moment du paiement
                 'id_document'      => $this->coDocument,
                 'notes'            => $this->coNotes ?: null,
                 'recorded_by'      => auth()->id(),
@@ -377,6 +390,7 @@ new class extends Component {
         $incident = PcaIncident::active();
 
         $data = [
+            'myAgency'    => auth()->user()->agency,
             'incident'    => $incident,
             'dataUntil'   => DB::table('pca_balances')->where('source', 'transactions')->max('as_of'),
             'lastHuawei'  => DB::table('pca_imports')->latest('created_at')->first(),
@@ -409,8 +423,20 @@ new class extends Component {
 
         if ($this->tab === 'incident') {
             $data['cashouts'] = $incident
-                ? PcaCashout::with(['recorder:id,name', 'canceller:id,name'])->where('incident_id', $incident->id)->latest()->paginate(50)
+                ? PcaCashout::with(['recorder:id,name', 'canceller:id,name'])
+                    ->where('incident_id', $incident->id)
+                    ->when($this->filterAgency !== '', fn ($q) => $q->where('agency_id', (int) $this->filterAgency))
+                    ->latest()->paginate(50)
                 : null;
+            // Récapitulatif par agence (cash-out valides)
+            $data['byAgency'] = $incident
+                ? PcaCashout::valid()->where('pca_cashouts.incident_id', $incident->id)
+                    ->leftJoin('agencies', 'agencies.id', '=', 'pca_cashouts.agency_id')
+                    ->selectRaw("pca_cashouts.agency_id, COALESCE(agencies.code || ' — ' || agencies.name, 'Sans agence') AS agency, COUNT(*) AS n, SUM(amount) AS total")
+                    ->groupBy('pca_cashouts.agency_id', 'agencies.code', 'agencies.name')
+                    ->orderByDesc('total')
+                    ->get()
+                : collect();
             $data['incidentStats'] = $incident
                 ? PcaCashout::valid()->where('incident_id', $incident->id)->selectRaw('COUNT(*) n, COALESCE(SUM(amount), 0) total, COUNT(DISTINCT party_id) clients')->first()
                 : null;
@@ -630,6 +656,12 @@ new class extends Component {
                 @if($incident && $canCashout)
                     <div style="border:1px solid #e5e7eb; border-radius:8px; padding:14px; margin-bottom:16px; background:#FAFBFC;">
                         <p style="font-size:12px; font-weight:600; color:#111827; margin:0 0 10px;">Enregistrer un cash-out payé</p>
+                        @if(!$myAgency || !$myAgency->is_active)
+                            <div style="background:#FDE8E8; border-left:3px solid #B91C1C; border-radius:6px; padding:9px 12px; font-size:12px; color:#7F1D1D; margin-bottom:10px;">
+                                {{ $myAgency ? 'Votre agence est désactivée' : 'Votre compte n\'est rattaché à aucune agence' }} : vous ne pouvez pas enregistrer de cash-out.
+                                Demandez à l'administrateur de vous rattacher à une agence (Administration → Agences).
+                            </div>
+                        @endif
                         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px; margin-bottom:10px;">
                             <div>
                                 <label style="{{ $labelStyle }}">Compte débité</label>
@@ -645,9 +677,10 @@ new class extends Component {
                                 @error('coAmount') {!! $err($message) !!} @enderror
                             </div>
                             <div>
-                                <label style="{{ $labelStyle }}">Agence / agent payeur</label>
-                                <input type="text" wire:model="coLocation" placeholder="Ex. Agence Centrale" style="{{ $inputStyle }} width:100%;">
-                                @error('coLocation') {!! $err($message) !!} @enderror
+                                <label style="{{ $labelStyle }}">Agence (déduite de votre compte)</label>
+                                <div style="{{ $inputStyle }} width:100%; background:#F3F4F6; color:{{ $myAgency ? '#111827' : '#B91C1C' }}; font-weight:600;">
+                                    {{ $myAgency ? $myAgency->label() : 'Aucune agence' }}
+                                </div>
                             </div>
                             <div>
                                 <label style="{{ $labelStyle }}">Pièce d'identité vérifiée</label>
@@ -715,12 +748,37 @@ new class extends Component {
                 @endforeach
             </div>
 
+            @if($byAgency->isNotEmpty())
+                <div style="{{ $card }} margin-bottom:16px;">
+                    <p style="font-size:13px; font-weight:700; color:#111827; margin:0 0 10px;">Par agence</p>
+                    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <tbody>
+                            @foreach($byAgency as $a)
+                                <tr style="border-bottom:1px solid #f3f4f6;">
+                                    <td style="padding:7px 0; color:#111827; font-weight:500;">{{ $a->agency }}</td>
+                                    <td style="padding:7px; color:#6b7280;">{{ number_format($a->n, 0, ',', ' ') }} cash-out</td>
+                                    <td style="padding:7px 0; text-align:right; color:#111827; font-weight:700;">{{ $fdj($a->total) }} FDJ</td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+            @endif
+
             <div style="{{ $card }} margin-bottom:16px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:10px; flex-wrap:wrap;">
                     <p style="font-size:13px; font-weight:700; color:#111827; margin:0;">Cash-out de l'incident</p>
-                    @if($canManage)
-                        <button wire:click="exportIncident({{ $incident->id }})" style="{{ $btnLight }}">⬇ Exporter (Excel)</button>
-                    @endif
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <select wire:model.live="filterAgency" style="{{ $inputStyle }}">
+                            <option value="">Toutes les agences</option>
+                            @foreach($byAgency->whereNotNull('agency_id') as $a)
+                                <option value="{{ $a->agency_id }}">{{ $a->agency }}</option>
+                            @endforeach
+                        </select>
+                        @if($canManage)
+                            <button wire:click="exportIncident({{ $incident->id }})" style="{{ $btnLight }}">⬇ Exporter (Excel)</button>
+                        @endif
+                    </div>
                 </div>
                 @if($cashouts->isEmpty())
                     <p style="font-size:12px; color:#9ca3af; margin:0;">Aucun cash-out enregistré pour l'instant.</p>

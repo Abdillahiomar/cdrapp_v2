@@ -15,6 +15,7 @@ class PcaCashout extends Model
         'account_type',
         'amount',
         'available_before',
+        'agency_id',
         'location',
         'id_document',
         'notes',
@@ -39,6 +40,11 @@ class PcaCashout extends Model
     public function incident(): BelongsTo
     {
         return $this->belongsTo(PcaIncident::class, 'incident_id');
+    }
+
+    public function agency(): BelongsTo
+    {
+        return $this->belongsTo(Agency::class);
     }
 
     public function recorder(): BelongsTo

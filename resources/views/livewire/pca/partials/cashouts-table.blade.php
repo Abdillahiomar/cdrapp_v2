@@ -5,7 +5,7 @@
 <table style="width:100%; border-collapse:collapse; font-size:12px;">
     <thead>
         <tr style="background:#F7F8FC;">
-            @foreach(array_merge(['N°', 'Date / heure'], $showParty ? ['Compte'] : [], ['Type de compte', 'Montant (FDJ)', 'Agence / agent', 'Pièce vérifiée', 'Saisi par', 'Statut', '']) as $th)
+            @foreach(array_merge(['N°', 'Date / heure'], $showParty ? ['Compte'] : [], ['Type de compte', 'Montant (FDJ)', 'Agence', 'Pièce vérifiée', 'Saisi par', 'Statut', '']) as $th)
                 <th style="padding:8px 10px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">{{ $th }}</th>
             @endforeach
         </tr>

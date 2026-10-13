@@ -25,7 +25,7 @@ class PcaCashoutsExport extends TextPreservingBinder implements FromCollection, 
 
     public function collection()
     {
-        return PcaCashout::with(['recorder:id,name', 'canceller:id,name'])
+        return PcaCashout::with(['recorder:id,name', 'canceller:id,name', 'agency:id,code,name'])
             ->where('incident_id', $this->incident->id)
             ->orderBy('created_at')
             ->get()
@@ -37,6 +37,8 @@ class PcaCashoutsExport extends TextPreservingBinder implements FromCollection, 
                 (string) $c->account_type,
                 (float) $c->amount,
                 (float) $c->available_before,
+                (string) ($c->agency->code ?? ''),
+                // Nom au moment du paiement (copie), même si l'agence a été renommée depuis
                 (string) $c->location,
                 (string) $c->id_document,
                 (string) ($c->recorder->name ?? ''),
@@ -55,7 +57,7 @@ class PcaCashoutsExport extends TextPreservingBinder implements FromCollection, 
     {
         return [
             'N°', 'Date / heure', 'Compte', 'Titulaire', 'Type de compte', 'Montant payé (FDJ)', 'Solde PCA disponible avant (FDJ)',
-            'Agence / agent', 'Pièce vérifiée', 'Saisi par', 'Statut', 'Annulation', 'Notes',
+            'Code agence', 'Agence', 'Pièce vérifiée', 'Saisi par', 'Statut', 'Annulation', 'Notes',
         ];
     }
 

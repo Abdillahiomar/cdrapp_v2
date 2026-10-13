@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\User;
+use App\Models\Agency;
 use App\Models\Department;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
@@ -18,7 +19,9 @@ new class extends Component {
     public string $editUserName   = '';
     public string $editUserEmail  = '';
     public string $selectedRole   = '';
-    public ?int   $selectedDept   = null;
+    // Non typés : un <select> « Aucun » renvoie une chaîne vide, convertie en null à l'enregistrement
+    public $selectedDept   = null;
+    public $selectedAgency = null;
 
 
     // Modal création utilisateur
@@ -27,17 +30,19 @@ new class extends Component {
     public string $newEmail        = '';
     public string $newPassword     = '';
     public string $newRole         = '';
-    public ?int   $newDept         = null;
+    public $newDept         = null;
+    public $newAgency       = null;
 
     public function assignerRole(int $userId): void
     {
         $user = User::with('roles', 'department')->findOrFail($userId);
-        $this->editUserId    = $userId;
-        $this->editUserName  = $user->name;
-        $this->editUserEmail = $user->email;
-        $this->selectedRole  = $user->roles->first()?->name ?? '';
-        $this->selectedDept  = $user->department_id;
-        $this->showRoleModal = true;
+        $this->editUserId     = $userId;
+        $this->editUserName   = $user->name;
+        $this->editUserEmail  = $user->email;
+        $this->selectedRole   = $user->roles->first()?->name ?? '';
+        $this->selectedDept   = $user->department_id;
+        $this->selectedAgency = $user->agency_id;
+        $this->showRoleModal  = true;
     }
 
     public function ouvrirCreation(): void
@@ -47,6 +52,7 @@ new class extends Component {
         $this->newPassword = '';
         $this->newRole     = '';
         $this->newDept     = null;
+        $this->newAgency   = null;
         $this->showCreateModal = true;
     }
 
@@ -59,6 +65,7 @@ new class extends Component {
             'newPassword' => 'required|string|min:8',
             'newRole'     => 'required|string',
             'newDept'     => 'nullable|exists:departments,id',
+            'newAgency'   => 'nullable|exists:agencies,id',
         ], [
             'newName.required'     => 'Le nom est obligatoire.',
             'newEmail.required'    => 'L\'email est obligatoire.',
@@ -72,7 +79,8 @@ new class extends Component {
             'name'          => $this->newName,
             'email'         => $this->newEmail,
             'password'      => bcrypt($this->newPassword),
-            'department_id' => $this->newDept,
+            'department_id' => $this->newDept ?: null,
+            'agency_id'     => $this->newAgency ?: null,
         ]);
 
         $user->assignRole($this->newRole);
@@ -84,20 +92,24 @@ new class extends Component {
     public function fermerCreateModal(): void
     {
         $this->showCreateModal = false;
-        $this->reset(['newName', 'newEmail', 'newPassword', 'newRole', 'newDept']);
+        $this->reset(['newName', 'newEmail', 'newPassword', 'newRole', 'newDept', 'newAgency']);
     }
 
     public function sauvegarder(): void
     {
         $this->validate([
             'selectedRole' => 'required|string',
-            'selectedDept' => 'nullable|exists:departments,id',
+            'selectedDept'   => 'nullable|exists:departments,id',
+            'selectedAgency' => 'nullable|exists:agencies,id',
         ]);
 
         $user = User::findOrFail($this->editUserId);
 
-        // Met à jour le département
-        $user->update(['department_id' => $this->selectedDept]);
+        // Met à jour le département et l'agence
+        $user->update([
+            'department_id' => $this->selectedDept ?: null,
+            'agency_id'     => $this->selectedAgency ?: null,
+        ]);
 
         // Met à jour le rôle
         $user->syncRoles([$this->selectedRole]);
@@ -110,15 +122,16 @@ new class extends Component {
     {
         $this->showRoleModal = false;
         $this->editUserId    = null;
-        $this->selectedRole  = '';
-        $this->selectedDept  = null;
+        $this->selectedRole   = '';
+        $this->selectedDept   = null;
+        $this->selectedAgency = null;
     }
 
     public function with(): array
     {
         $roleClass = config('permission.models.role');
 
-        $query = User::with('roles', 'department');
+        $query = User::with('roles', 'department', 'agency');
 
         if ($this->search) {
             $query->where(function ($q) {
@@ -135,6 +148,11 @@ new class extends Component {
             'users'       => $query->orderBy('name')->paginate(50),
             'roles'       => $roleClass::orderBy('name')->get(),
             'departments' => Department::orderBy('name')->get(),
+            // Agences actives, plus celle de l'utilisateur modifié si elle a été désactivée
+            'agencies'    => Agency::where('is_active', true)
+                ->when($this->selectedAgency, fn ($q) => $q->orWhere('id', $this->selectedAgency))
+                ->orderBy('code')
+                ->get(),
         ];
     }
 };
@@ -155,7 +173,7 @@ new class extends Component {
     <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
     <div>
         <h2 style="font-size:16px; font-weight:700; color:#111827; margin:0 0 4px;">Gestion des utilisateurs</h2>
-        <p style="font-size:12px; color:#9ca3af; margin:0;">Attribuez des rôles et départements à chaque utilisateur.</p>
+        <p style="font-size:12px; color:#9ca3af; margin:0;">Attribuez un rôle, un département et une agence à chaque utilisateur.</p>
     </div>
     <button wire:click="ouvrirCreation"
             style="background:#1B2F6E; color:#fff; font-size:13px; font-weight:600; padding:9px 18px; border-radius:8px; border:none; cursor:pointer; display:flex; align-items:center; gap:7px;">
@@ -204,6 +222,7 @@ new class extends Component {
                         <th style="padding:10px 16px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">#</th>
                         <th style="padding:10px 16px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Utilisateur</th>
                         <th style="padding:10px 16px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Département</th>
+                        <th style="padding:10px 16px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Agence</th>
                         <th style="padding:10px 16px; text-align:left; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Rôle actuel</th>
                         <th style="padding:10px 16px; text-align:center; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">Action</th>
                     </tr>
@@ -234,6 +253,16 @@ new class extends Component {
                                 @if($user->department)
                                     <span style="background:#f3f4f6; color:#374151; font-size:10px; font-weight:600; padding:2px 8px; border-radius:8px;">
                                         {{ $user->department->name }}
+                                    </span>
+                                @else
+                                    <span style="color:#9ca3af; font-size:11px;">—</span>
+                                @endif
+                            </td>
+
+                            <td style="padding:10px 16px; color:#374151;">
+                                @if($user->agency)
+                                    <span style="background:#E8ECF8; color:#1B2F6E; font-size:10px; font-weight:600; padding:2px 8px; border-radius:8px;" title="{{ $user->agency->city }}">
+                                        {{ $user->agency->label() }}
                                     </span>
                                 @else
                                     <span style="color:#9ca3af; font-size:11px;">—</span>
@@ -271,13 +300,13 @@ new class extends Component {
                                         <path d="M8 1a3 3 0 100 6A3 3 0 008 1zM4 9a4 4 0 018 0v1H4V9z"/>
                                         <path d="M13 8v4M11 10h4" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
                                     </svg>
-                                    Attribuer rôle
+                                    Modifier
                                 </button>
                             </td>
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="5" style="padding:40px; text-align:center; color:#9ca3af; font-size:13px;">
+                            <td colspan="6" style="padding:40px; text-align:center; color:#9ca3af; font-size:13px;">
                                 Aucun utilisateur trouvé.
                             </td>
                         </tr>
@@ -304,7 +333,7 @@ new class extends Component {
 
             <div style="padding:16px 20px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; justify-content:space-between;">
                 <div>
-                    <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">Attribuer un rôle</p>
+                    <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">Rôle, département et agence</p>
                     <p style="font-size:11px; color:#9ca3af; margin:2px 0 0;">{{ $editUserName }} — {{ $editUserEmail }}</p>
                 </div>
                 <button wire:click="fermerModal"
@@ -328,6 +357,23 @@ new class extends Component {
                             <option value="{{ $dept->id }}">{{ $dept->name }} ({{ $dept->code }})</option>
                         @endforeach
                     </select>
+                </div>
+
+                <div style="margin-bottom:16px;">
+                    <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:6px; font-weight:600;">
+                        Agence
+                    </label>
+                    <select wire:model="selectedAgency"
+                            style="width:100%; border:1px solid #d1d5db; border-radius:7px; padding:9px 12px; font-size:13px; color:#111827; outline:none; background:#fff;">
+                        <option value="">— Aucune agence —</option>
+                        @foreach($agencies as $agency)
+                            <option value="{{ $agency->id }}">{{ $agency->label() }}{{ $agency->is_active ? '' : ' (désactivée)' }}</option>
+                        @endforeach
+                    </select>
+                    <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">Reprise automatiquement sur les cash-out PCA saisis par cet utilisateur.</p>
+                    @error('selectedAgency')
+                        <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p>
+                    @enderror
                 </div>
 
                 <div style="margin-bottom:20px;">
@@ -457,6 +503,20 @@ new class extends Component {
                         <option value="{{ $dept->id }}">{{ $dept->name }} ({{ $dept->code }})</option>
                     @endforeach
                 </select>
+            </div>
+
+            <div>
+                <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px; font-weight:600;">Agence</label>
+                <select wire:model="newAgency"
+                        style="width:100%; border:1px solid #d1d5db; border-radius:7px; padding:9px 12px; font-size:13px; color:#111827; outline:none; background:#fff;">
+                    <option value="">— Aucune agence —</option>
+                    @foreach($agencies as $agency)
+                        <option value="{{ $agency->id }}">{{ $agency->label() }}</option>
+                    @endforeach
+                </select>
+                @error('newAgency')
+                    <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p>
+                @enderror
             </div>
 
             <div>

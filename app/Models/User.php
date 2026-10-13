@@ -12,7 +12,7 @@ use Illuminate\Notifications\Notifiable;
 //use Spatie\LaravelPermission\Traits\HasRoles;
 use Spatie\Permission\Traits\HasRoles;
 
-#[Fillable(['name', 'email', 'password', 'departement_id'])]
+#[Fillable(['name', 'email', 'password', 'department_id', 'agency_id'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -35,6 +35,12 @@ class User extends Authenticatable
     public function department()
     {
         return $this->belongsTo(Department::class);
+    }
+
+    /** Agence de l'utilisateur (une seule) : reprise sur les cash-out PCA */
+    public function agency()
+    {
+        return $this->belongsTo(Agency::class);
     }
 
     
