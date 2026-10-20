@@ -35,6 +35,7 @@ class RolesPermissionsSeeder extends Seeder
             'finance.bill-payments.view',
             'pca.view', 'pca.cashout', 'pca.manage',
             'admin.agencies.manage',
+            'network.view', 'network.export', 'network.manage',
         ];
 
         foreach ($permissions as $perm) {

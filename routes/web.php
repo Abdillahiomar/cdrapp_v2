@@ -38,6 +38,12 @@ Volt::route('/all_accounts_balance', 'revenue.balance')->name('balances')->middl
 
 Volt::route('finance/banks-accounts', 'finance.banks-accounts')->name('finance.banks-accounts');
 Volt::route('finance/bank-balances', 'finance.bank-balances')->name('finance.bank-balances');
+Route::middleware(['auth', 'permission:network.view'])->prefix('reseau')->name('network.')->group(function () {
+    Volt::route('/', 'network.dashboard')->name('dashboard');
+    Volt::route('/annuaire', 'network.directory')->name('directory');
+    Volt::route('/reseaux', 'network.networks')->name('networks');
+    Volt::route('/controles', 'network.controls')->name('controls');
+});
 Volt::route('/pca', 'pca.index')->name('pca.index')->middleware(['auth', 'permission:pca.view']);
 Volt::route('/paiements-factures','transactions.bill_payments')->name('bill-payments.index')->middleware(['auth', 'permission:finance.bill-payments.view']);
 

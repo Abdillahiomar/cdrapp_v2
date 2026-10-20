@@ -175,6 +175,25 @@
             </a>
         @endcan
 
+        {{-- ── RÉSEAU DE DISTRIBUTION ── --}}
+        @can('network.view')
+            <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Réseau de distribution</p>
+            @foreach([
+                'network.dashboard' => ['Tableau de bord réseau', '<path d="M2 14V9h3v5M6.5 14V5h3v9M11 14V2h3v12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>'],
+                'network.directory' => ['Annuaire', '<rect x="2.5" y="1.5" width="11" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M5 5h6M5 8h6M5 11h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'],
+                'network.networks'  => ['Réseaux', '<circle cx="8" cy="3.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="3.5" cy="12.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="12.5" cy="12.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M7 5l-2.6 5.8M9 5l2.6 5.8" stroke="currentColor" stroke-width="1.2"/>'],
+                'network.controls'  => ['Contrôles réseau', '<path d="M8 1.5l5.5 2v4c0 3.4-2.3 6-5.5 7-3.2-1-5.5-3.6-5.5-7v-4z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M8 5v3.5M8 10.5v.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'],
+            ] as $route => [$label, $icon])
+                <a href="{{ route($route) }}" wire:navigate style="{{ request()->routeIs($route) ? $linkActive : $linkInactive }}">
+                    <svg width="15" height="15" viewBox="0 0 16 16" style="flex-shrink:0;">{!! $icon !!}</svg>
+                    {{ $label }}
+                    @if(request()->routeIs($route))
+                        <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
+                    @endif
+                </a>
+            @endforeach
+        @endcan
+
         {{-- ── OPÉRATIONS ── --}}
         @canany(['operations.import-msisdn', 'tools.qrcode'])
             <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Opérations</p>
