@@ -44,6 +44,7 @@ class ExportRequest extends Model
             'fraud_chains'      => 'chaines_fraude_',
             'fraud_commission'  => 'commission_indue_',
             'fraud_structuring' => 'structuring_',
+            'customers'         => 'clients_',
             default         => 'transactions_',
         };
 

@@ -36,6 +36,7 @@ class RolesPermissionsSeeder extends Seeder
             'pca.view', 'pca.cashout', 'pca.manage',
             'admin.agencies.manage',
             'network.view', 'network.export', 'network.manage',
+            'customer360.view', 'customer360.export', 'customer360.manage',
         ];
 
         foreach ($permissions as $perm) {

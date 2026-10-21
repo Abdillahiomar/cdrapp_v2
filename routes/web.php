@@ -38,6 +38,13 @@ Volt::route('/all_accounts_balance', 'revenue.balance')->name('balances')->middl
 
 Volt::route('finance/banks-accounts', 'finance.banks-accounts')->name('finance.banks-accounts');
 Volt::route('finance/bank-balances', 'finance.bank-balances')->name('finance.bank-balances');
+// Module « Customers » (base clients kyc.customer_master) — distinct de la page Clients (/customers)
+Route::middleware(['auth', 'permission:customer360.view'])->prefix('customers-base')->name('customer360.')->group(function () {
+    Volt::route('/', 'customers360.dashboard')->name('dashboard');
+    Volt::route('/annuaire', 'customers360.directory')->name('directory');
+    Volt::route('/controles', 'customers360.controls')->name('controls');
+    Volt::route('/journal', 'customers360.journal')->name('journal');
+});
 Route::middleware(['auth', 'permission:network.view'])->prefix('reseau')->name('network.')->group(function () {
     Volt::route('/', 'network.dashboard')->name('dashboard');
     Volt::route('/annuaire', 'network.directory')->name('directory');
