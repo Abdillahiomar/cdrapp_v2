@@ -31,6 +31,7 @@ Volt::route('/aml/listes', 'aml.watchlist')->name('aml.watchlist')->middleware([
 Volt::route('/kyc-management', 'kyc.index')->name('kyc.index')->middleware(['auth', 'permission:kyc.duplicates.view']);
 
 Volt::route('/operations/bulk_search', 'operations.index')->name('operations.index')->middleware('auth');
+Volt::route('/operations/verification', 'operations.verification')->name('operations.verification')->middleware(['auth', 'permission:operations.verify-customers']);
 Volt::route('/organizations', 'organizations.index')->name('organizations.index')->middleware('auth');
 Volt::route('/daily-report', 'dashboard.dailly')->name('daily-report.index')->middleware('auth');
 Volt::route('/revenue-accounts', 'revenue.index')->name('revenue.index')->middleware('auth');

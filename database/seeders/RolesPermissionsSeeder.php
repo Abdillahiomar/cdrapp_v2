@@ -37,6 +37,7 @@ class RolesPermissionsSeeder extends Seeder
             'admin.agencies.manage',
             'network.view', 'network.export', 'network.manage',
             'customer360.view', 'customer360.export', 'customer360.manage',
+            'operations.verify-customers',
         ];
 
         foreach ($permissions as $perm) {

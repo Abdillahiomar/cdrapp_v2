@@ -214,19 +214,34 @@
         @endcan
 
         {{-- ── OPÉRATIONS ── --}}
-        @canany(['operations.import-msisdn', 'tools.qrcode'])
+        @canany(['operations.import-msisdn', 'tools.qrcode', 'operations.verify-customers'])
             <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Opérations</p>
         @endcanany
 
        @can('operations.import-msisdn')
             <a href="{{ route('operations.index') }}" wire:navigate
-               style="{{ request()->routeIs('operations.*') ? $linkActive : $linkInactive }}">
+               style="{{ request()->routeIs('operations.index') ? $linkActive : $linkInactive }}">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;">
                     <path d="M8 2v8M5 7l3 3 3-3" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/>
                     <path d="M2 12h12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
                 </svg>
                 Import MSISDN
-                @if(request()->routeIs('operations.*'))
+                @if(request()->routeIs('operations.index'))
+                    <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
+                @endif
+            </a>
+        @endcan
+
+        @can('operations.verify-customers')
+            <a href="{{ route('operations.verification') }}" wire:navigate
+               style="{{ request()->routeIs('operations.verification') ? $linkActive : $linkInactive }}">
+                <svg width="15" height="15" viewBox="0 0 16 16" style="flex-shrink:0;">
+                    <circle cx="6.5" cy="5" r="2.6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+                    <path d="M1.5 14c.5-2.8 2.5-4.4 5-4.4 1 0 1.9.2 2.6.7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                    <path d="M10 12.2l1.6 1.6 3-3.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Vérification clients
+                @if(request()->routeIs('operations.verification'))
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
             </a>
