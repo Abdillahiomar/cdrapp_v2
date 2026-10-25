@@ -113,7 +113,16 @@ new class extends Component {
 
         $diskUsage = collect($disk->files('exports'))->sum(fn ($f) => $disk->size($f));
 
+        // Exports jamais pris en charge par le worker depuis plus de 10 min (hors filtres) :
+        // signe que le worker de queue ne tourne pas
+        $stuck = ExportRequest::where('status', 'pending')
+            ->where('created_at', '<', now()->subMinutes(10))
+            ->selectRaw('COUNT(*) AS total, MIN(created_at) AS oldest')
+            ->first();
+
         return [
+            'stuckCount'     => (int) $stuck->total,
+            'stuckOldest'    => $stuck->oldest ? Carbon::parse($stuck->oldest) : null,
             'exports'        => $query->latest()->paginate(20),
             'countsByStatus' => $countsByStatus,
             'diskUsage'      => $diskUsage,
@@ -125,7 +134,7 @@ new class extends Component {
     }
 };
 ?>
-<div style="padding:24px;">
+<div style="padding:24px;" @if($stuckCount) wire:poll.30s @endif>
 
 @php
     $statuses = [
@@ -150,6 +159,21 @@ new class extends Component {
         <h2 style="font-size:16px; font-weight:700; color:#111827; margin:0 0 4px;">Exports de transactions</h2>
         <p style="font-size:12px; color:#9ca3af; margin:0;">Suivi des fichiers Excel / CSV générés par les utilisateurs, de la demande jusqu'à la suppression.</p>
     </div>
+
+    {{-- ALERTE WORKER --}}
+    @if($stuckCount)
+        <div style="background:#FEF3C7; color:#92400E; border:1px solid #FCD34D; border-radius:8px; padding:12px 14px; font-size:12px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+            <div>
+                <strong>{{ $stuckCount }} export(s) en attente depuis plus de 10 minutes</strong>
+                (le plus ancien demandé le {{ $stuckOldest->format('d/m/Y à H:i') }}).
+                Le worker de file d'attente ne tourne peut-être pas : vérifiez <code>sudo supervisorctl status</code> sur le serveur.
+            </div>
+            <button wire:click="$set('filterStatus', 'pending')"
+                    style="background:#fff; color:#92400E; font-size:11px; font-weight:600; padding:5px 10px; border-radius:6px; border:1px solid #FCD34D; cursor:pointer; white-space:nowrap;">
+                Voir les exports en attente
+            </button>
+        </div>
+    @endif
 
     {{-- MESSAGES --}}
     @if(session('export-message'))
