@@ -14,6 +14,7 @@ new class extends Component {
     public float $volume_total    = 0;
     public int   $nb_transactions = 0;
     public float $revenus         = 0;
+    public float $total_clawback  = 0;   // montant des Commission Claw Back (reversé au Service Provider)
     public float $ticket_moyen    = 0;
     public float $taux_reussite   = 0;
 
@@ -71,6 +72,10 @@ new class extends Component {
         $idxCashin   = $this->reasonIndexesFor('customer cash in');
         $idxMerchant = $this->reasonIndexesFor('merchant payment');
 
+        // Commission Claw Back : frais et commission à 0, le revenu est le montant de la transaction
+        $idxClawback = \App\Models\TransactionType::where('txn_type_name', 'Commission Claw Back')
+            ->pluck('txn_index')->map(fn($v) => (int) $v)->all() ?: [0];
+        $inClawback  = implode(',', $idxClawback);
 
         // ── KPIs globaux (une seule passe) ──
         $kpi = DB::selectOne("
@@ -78,6 +83,7 @@ new class extends Component {
                 COALESCE(SUM(actual_amount), 0)                                   AS volume_total,
                 COUNT(*)                                                          AS nb_transactions,
                 COALESCE(SUM(charge_amount -commission_amount), 0)              AS revenus,
+                COALESCE(SUM(actual_amount) FILTER (WHERE txn_index IN ($inClawback)), 0) AS total_clawback,
                 COALESCE(AVG(actual_amount), 0)                                  AS ticket_moyen,
                 COALESCE(
                     100.0 * COUNT(*) FILTER (WHERE status = 'Completed') / NULLIF(COUNT(*), 0),
@@ -92,7 +98,8 @@ new class extends Component {
         $this->volume_total    = (float) $kpi->volume_total;
         $this->nb_transactions = (int)   $kpi->nb_transactions;
         $this->revenus         = (float) $kpi->revenus;
-        $this->ticket_moyen    = (float) $kpi->ticket_moyen;
+        $this->total_clawback  = (float) $kpi->total_clawback;
+        $this->ticket_moyen   = (float) $kpi->ticket_moyen;
         $this->taux_reussite   = (float) $kpi->taux_reussite;
 
         // ── Comparaison période précédente (même durée, juste avant) ──
@@ -316,7 +323,7 @@ if (!empty($idxMerchant)) {
     @else
 
         {{-- KPIs PRINCIPAUX --}}
-        <div style="display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:12px; margin-bottom:16px;">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:16px;">
 
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #00843D;">
                 <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Valeur total</p>
@@ -339,6 +346,18 @@ if (!empty($idxMerchant)) {
                 <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Revenus</p>
                 <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format($revenus * 100, 0, ',', ' ') }}</p>
                 <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">FDJ (frais - commission)</p>
+            </div>
+
+            <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #0EA5E9;">
+                <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Total Claw Back</p>
+                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format($total_clawback * 100, 0, ',', ' ') }}</p>
+                <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">FDJ (Commission Claw Back)</p>
+            </div>
+
+            <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #005C2B;">
+                <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Revenu total</p>
+                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format(($revenus + $total_clawback) * 100, 0, ',', ' ') }}</p>
+                <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">FDJ (revenus + claw back)</p>
             </div>
 
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #9333ea;">
