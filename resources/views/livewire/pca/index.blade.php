@@ -476,11 +476,12 @@ new class extends Component {
             $ids = $ids->merge(DB::table('pca_balances')->where('party_id', 'like', $term . '%')->distinct()->limit(20)->pluck('party_id'));
         }
 
-        $ids = $ids->merge(DB::table('kyc.kyc_customers')
+        $ids = $ids->merge(DB::table('kyc.customer_kyc')
             ->where(fn ($q) => $q->where('full_name', 'ilike', '%' . $term . '%')->orWhere('id_number', $term))
             ->limit(20)->pluck('msisdn'));
 
         $ids = $ids->merge(DB::table('organizations')->where('BIZ_ORG_NAME', 'ilike', '%' . $term . '%')->limit(20)->pluck('SHORT_CODE')->map(fn ($v) => (string) $v));
+        $ids = $ids->merge(DB::table('kyc.org_master')->where('org_name', 'ilike', '%' . $term . '%')->limit(20)->pluck('short_code')->map(fn ($v) => (string) $v));
 
         // Nom porté par les transactions (organisations surtout : la table organizations peut être vide)
         $ids = $ids->merge(DB::table('pca_balances')->where('party_name', 'ilike', '%' . $term . '%')->distinct()->limit(20)->pluck('party_id'));
@@ -490,7 +491,11 @@ new class extends Component {
             return [];
         }
 
-        $names = DB::table('kyc.kyc_customers')->whereIn('msisdn', $ids)->pluck('full_name', 'msisdn')
+        // Nom KYC le plus récent par MSISDN (pluck : la dernière ligne lue l'emporte)
+        $names = DB::table('kyc.customer_kyc')->whereIn('msisdn', $ids)->whereNotNull('full_name')
+            ->orderBy('source_datetime')->pluck('full_name', 'msisdn')
+            // Sans fiche KYC client : nom de l'organisation au même short code (org_master)
+            ->union(DB::table('kyc.org_master')->whereIn(DB::raw('short_code::text'), $ids)->pluck('org_name', 'short_code')->mapWithKeys(fn ($v, $k) => [(string) $k => $v]))
             ->union(DB::table('organizations')->whereIn(DB::raw('"SHORT_CODE"::text'), $ids)->pluck('BIZ_ORG_NAME', 'SHORT_CODE')->mapWithKeys(fn ($v, $k) => [(string) $k => $v]));
 
         return DB::table('pca_balances')

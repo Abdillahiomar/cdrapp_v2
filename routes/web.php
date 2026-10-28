@@ -60,6 +60,7 @@ Volt::route('/ancien_cdrapp', 'transactions.old_transactions')->name('ancien_cdr
 Volt::route('/admin/roles', 'admin.roles.index')->name('admin.roles.index')->middleware(['auth', 'permission:admin.roles.view']);
 Volt::route('/admin/users', 'admin.users.index')->name('admin.users.index')->middleware(['auth', 'permission:admin.users.view']);
 Volt::route('/admin/agences', 'admin.agencies.index')->name('admin.agencies.index')->middleware(['auth', 'permission:admin.agencies.manage']);
+Volt::route('/admin/employes', 'admin.employees.index')->name('admin.employees.index')->middleware(['auth', 'role:super-admin']);
 Volt::route('/admin/audit-logs', 'admin.audit-logs.index')->name('admin.audit-logs.index')->middleware(['auth', 'permission:admin.audit-logs.view']);
 Route::middleware(['auth', 'permission:tools.qrcode'])->prefix('outils/qr-code')->name('qrcode.')->group(function () {
     Volt::route('/', 'tools.qrcode')->name('index');

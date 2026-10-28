@@ -121,9 +121,30 @@ class PcaBalances
             ]);
         }
 
-        $c = DB::table('kyc.kyc_customers')->where('msisdn', $partyId)->first();
+        // Un MSISDN peut avoir plusieurs fiches (client réinscrit sous un nouvel identifiant) :
+        // la fiche du client actuel (customer_master) d'abord, puis la plus récente
+        $c = DB::table('kyc.customer_kyc as k')
+            ->where('k.msisdn', $partyId)
+            ->orderByRaw('EXISTS (SELECT 1 FROM kyc.customer_master m WHERE m.unique_system_id = k.unique_system_id) DESC')
+            ->orderByDesc('k.source_datetime')
+            ->first();
 
-        return $c ? array_filter([
+        // Numéro sans fiche KYC client : il peut s'agir du short code d'une organisation
+        if (!$c) {
+            $o = DB::table('kyc.org_master')->whereRaw('short_code::text = ?', [$partyId])->first();
+
+            return $o ? array_filter([
+                'Organisation'     => $o->org_name,
+                'Organisation mère'=> $o->parent_name,
+                'Segment'          => $o->segment,
+                'Produit'          => $o->products,
+                'Statut'           => $o->identity_status,
+                'Inscrite le'      => $o->registered_at ? Carbon::parse($o->registered_at)->format('d/m/Y') : null,
+                'Source'           => 'Référentiel organisations (org_master)',
+            ]) : null;
+        }
+
+        return array_filter([
             'Nom complet'      => $c->full_name ?? null,
             'Nom de la mère'   => $c->mother_full_name ?? null,
             'Date de naissance'=> $c->date_of_birth ? Carbon::parse($c->date_of_birth)->format('d/m/Y') : null,
@@ -131,7 +152,7 @@ class PcaBalances
             'Expiration pièce' => $c->id_expiry_date ? Carbon::parse($c->id_expiry_date)->format('d/m/Y') : null,
             'Profil'           => $c->customer_profile ?? null,
             'Nationalité'      => $c->nationality ?? null,
-        ]) : null;
+        ]);
     }
 
     /**
@@ -156,8 +177,20 @@ class PcaBalances
         fputcsv($out, ['Compte', 'Titulaire', 'Type de compte', 'Nom', 'Pièce', 'Solde (FDJ)', 'Solde au', 'Source'], ';');
 
         $query = DB::table('pca_balances as b')
-            ->leftJoin('kyc.kyc_customers as c', function ($j) {
-                $j->on('c.msisdn', '=', 'b.party_id')->where('b.party_type', '=', 'Customer');
+            // Une seule fiche KYC par compte, choisie comme dans identity()
+            ->leftJoinLateral(
+                DB::table('kyc.customer_kyc as k')
+                    ->whereColumn('k.msisdn', 'b.party_id')
+                    ->where('b.party_type', 'Customer')
+                    ->orderByRaw('EXISTS (SELECT 1 FROM kyc.customer_master m WHERE m.unique_system_id = k.unique_system_id) DESC')
+                    ->orderByDesc('k.source_datetime')
+                    ->limit(1)
+                    ->select('k.full_name', 'k.id_type', 'k.id_number'),
+                'c'
+            )
+            // Numéro sans fiche KYC client : nom de l'organisation au même short code
+            ->leftJoin('kyc.org_master as om', function ($j) {
+                $j->on(DB::raw('om.short_code::text'), '=', 'b.party_id')->where('b.party_type', '=', 'Customer');
             })
             ->leftJoin('kyc.kyc_organizations as o', function ($j) {
                 $j->on(DB::raw('o.short_code::text'), '=', 'b.party_id')->where('b.party_type', '=', 'Organization');
@@ -168,7 +201,7 @@ class PcaBalances
             ->when($nonZeroOnly, fn ($q) => $q->where('b.balance', '<>', 0))
             ->select(
                 'b.id', 'b.party_id', 'b.party_type', 'b.account_type', 'b.balance', 'b.as_of', 'b.source',
-                DB::raw('COALESCE(c.full_name, og."BIZ_ORG_NAME", b.party_name) AS name'),
+                DB::raw('COALESCE(c.full_name, om.org_name, og."BIZ_ORG_NAME", b.party_name) AS name'),
                 DB::raw("TRIM(COALESCE(c.id_type, o.id_type, '') || ' ' || COALESCE(c.id_number, o.id_number, '')) AS id_doc")
             )
             ->orderBy('b.id');

@@ -407,6 +407,20 @@
                 </a>
             @endcan
 
+            @role('super-admin')
+                <a href="{{ route('admin.employees.index') }}" wire:navigate
+                   style="{{ request()->routeIs('admin.employees.*') ? $linkActive : $linkInactive }}">
+                    <svg width="15" height="15" viewBox="0 0 16 16" style="flex-shrink:0;">
+                        <path d="M2 14V9h3v5M6.5 14V4h3v10M11 14V7h3v7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                        <path d="M8 1.2l.6 1.2 1.3.2-.95.9.22 1.3L8 4.2l-1.17.6.22-1.3-.95-.9 1.3-.2z" fill="currentColor"/>
+                    </svg>
+                    Classement employés
+                    @if(request()->routeIs('admin.employees.*'))
+                        <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
+                    @endif
+                </a>
+            @endrole
+
             @can('admin.agencies.manage')
                 <a href="{{ route('admin.agencies.index') }}" wire:navigate
                    style="{{ request()->routeIs('admin.agencies.*') ? $linkActive : $linkInactive }}">
