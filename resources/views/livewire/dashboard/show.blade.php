@@ -26,6 +26,7 @@ new class extends Component {
     // Graphiques (données brutes passées au JS)
     public array $serie_jours     = [];   // [{jour, volume, nb}]
     public array $repartition_type = [];  // [{type, volume, nb, revenus}]
+    public array $revenus_type     = [];  // [{type, revenus}] : revenu ≠ 0, trié par revenu
     public array $repartition_canal = []; // [{canal, nb}]
 
     // Comparaison période précédente
@@ -155,6 +156,23 @@ new class extends Component {
             LIMIT 15
         ", array_merge([$debut, $fin], $typesExclus)));
 
+        // ── Revenus par type : tous les types au revenu non nul (positif ou négatif), du plus
+        //    grand au plus petit. Le Commission Claw Back compte pour son montant (cf. Revenu total).
+        $this->revenus_type = array_map(fn($r) => (array) $r, DB::select("
+            SELECT
+                tt.txn_type_name AS type,
+                SUM(CASE WHEN f.txn_index IN ($inClawback) THEN f.actual_amount
+                         ELSE f.charge_amount - f.commission_amount END) AS revenus
+            FROM fact_txn_v2 f
+            JOIN transaction_types tt ON tt.txn_index = f.txn_index
+            WHERE f.transaction_initiated_time >= ? AND f.transaction_initiated_time < ?
+            AND f.status = 'Completed'
+            GROUP BY tt.txn_type_name
+            HAVING SUM(CASE WHEN f.txn_index IN ($inClawback) THEN f.actual_amount
+                            ELSE f.charge_amount - f.commission_amount END) <> 0
+            ORDER BY revenus DESC
+        ", [$debut, $fin]));
+
         // ── Répartition par canal ──
         $this->repartition_canal = array_map(fn($r) => (array) $r, DB::select("
             SELECT
@@ -203,8 +221,9 @@ if (!empty($idxMerchant)) {
         // Envoi des données aux graphiques JS
         $this->dispatch('dashboard-updated',
             serie:  $this->serie_jours,
-            types:  $this->repartition_type,
-            canaux: $this->repartition_canal,
+            types:   $this->repartition_type,
+            revenus: $this->revenus_type,
+            canaux:  $this->repartition_canal,
         );
     }
 
@@ -523,10 +542,10 @@ if (!empty($idxMerchant)) {
         keys.forEach(k => { if (charts[k]) { charts[k].destroy(); delete charts[k]; } });
     }
 
-    function renderDashboard(serie, types, canaux) {
+    function renderDashboard(serie, types, revenus, canaux) {
         if (typeof Chart === 'undefined') {
             // Chart.js pas encore chargé : on réessaie
-            setTimeout(() => renderDashboard(serie, types, canaux), 100);
+            setTimeout(() => renderDashboard(serie, types, revenus, canaux), 100);
             return;
         }
 
@@ -602,17 +621,24 @@ if (!empty($idxMerchant)) {
 
         const ctxR = document.getElementById('chartRevenus');
         if (ctxR) {
+            // Hauteur selon le nombre de types (une barre lisible par type)
+            ctxR.parentElement.style.height = Math.max(280, revenus.length * 24) + 'px';
+            const values = revenus.map(r => Number(r.revenus) * 100);
             charts.revenus = new Chart(ctxR, {
                 type: 'bar',
                 data: {
-                    labels: types.map(r => r.type),
+                    labels: revenus.map(r => r.type),
                     datasets: [{
                         label: 'Revenus (FDJ)',
-                        data: types.map(r => Number(r.revenus) * 100),
-                        backgroundColor: '#F5A800',
+                        data: values,
+                        backgroundColor: values.map(v => v < 0 ? '#E24B4A' : '#F5A800'),
                     }]
                 },
-                options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+                options: {
+                    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => ' ' + formatFdj(c.parsed.x) + ' FDJ' } } },
+                    scales: { x: { ticks: { callback: (v) => formatFdj(v) } }, y: { ticks: { font: { size: 10 } } } }
+                }
             });
         }
 
@@ -714,7 +740,7 @@ if (!empty($idxMerchant)) {
         const payload = Array.isArray(data) ? data[0] : data;
         // requestAnimationFrame garantit que le DOM (canvas) est bien inséré
         requestAnimationFrame(() => {
-            renderDashboard(payload.serie || [], payload.types || [], payload.canaux || []);
+            renderDashboard(payload.serie || [], payload.types || [], payload.revenus || [], payload.canaux || []);
         });
     });
 
