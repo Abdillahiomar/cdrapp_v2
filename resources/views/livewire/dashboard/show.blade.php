@@ -24,7 +24,8 @@ new class extends Component {
     public int $clients_actifs = 0;
 
     // Graphiques : données envoyées au JS par l'événement dashboard-updated (RevenueDashboard)
-    public ?array  $top_payers = null;    // tableau du Top 10 ; null = table pas encore créée
+    public ?array  $top_payers = null;    // tableau du Top payeurs ; null = table pas encore créée
+    public int     $top_limit  = 10;      // nombre de payeurs affichés : 10 → 100, par 10
     public ?string $last_date  = null;    // dernier jour agrégé par manager:aggregate
 
     // Comparaison période précédente
@@ -72,7 +73,7 @@ new class extends Component {
         $idxMerchant = $this->reasonIndexesFor('merchant payment');
 
         // ── Cadres et graphiques : agrégats de manager:aggregate (montants en FDJ) ──
-        $dash = (new \App\Support\RevenueDashboard($this->date_debut, $this->date_fin))->build();
+        $dash = (new \App\Support\RevenueDashboard($this->date_debut, $this->date_fin, $this->top_limit))->build();
 
         foreach (['volume_total', 'nb_transactions', 'revenus', 'total_clawback', 'ticket_moyen', 'taux_reussite', 'volume_precedent', 'variation_volume'] as $k) {
             $this->{$k} = $dash['kpi'][$k];
@@ -118,6 +119,19 @@ if (!empty($idxMerchant)) {
 
         // Envoi des données aux graphiques JS
         $this->dispatch('dashboard-updated', dash: $dash);
+    }
+
+    /** Changement du nombre de payeurs : seul le Top payeurs est recalculé */
+    public function updatedTopLimit(): void
+    {
+        $this->top_limit = max(10, min(100, (int) round($this->top_limit / 10) * 10));
+
+        if (!$this->searched) {
+            return;
+        }
+
+        $this->top_payers = (new \App\Support\RevenueDashboard($this->date_debut, $this->date_fin, $this->top_limit))->topPayers();
+        $this->dispatch('top-payers-updated', top: $this->top_payers ?? []);
     }
 
     public function searchAirtime()
@@ -377,10 +391,24 @@ if (!empty($idxMerchant)) {
             </div>
         </div>
 
-        {{-- 8. TOP 10 DES PAYEURS DE FRAIS --}}
+        {{-- 8. TOP DES PAYEURS DE FRAIS --}}
         <div style="{{ $card }}">
-            <p style="{{ $title }}">Top 10 des payeurs de frais</p>
-            <p style="{{ $sub }}">Comptes (débiteurs) qui ont payé le plus de frais sur la période</p>
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+                <div>
+                    <p style="{{ $title }}">Top {{ $top_limit }} des payeurs de frais</p>
+                    <p style="{{ $sub }}">Comptes (débiteurs) qui ont payé le plus de frais sur la période</p>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <label style="font-size:11px; color:#6b7280;">Afficher</label>
+                    <select wire:model.live="top_limit"
+                            style="border:1px solid #d1d5db; border-radius:7px; padding:6px 10px; font-size:12px; color:#111827; outline:none; background:#fff;">
+                        @foreach(range(10, 100, 10) as $n)
+                            <option value="{{ $n }}">Top {{ $n }}</option>
+                        @endforeach
+                    </select>
+                    <span wire:loading wire:target="top_limit" style="font-size:11px; color:#9ca3af;">Chargement…</span>
+                </div>
+            </div>
             @if($top_payers === null)
                 <p style="font-size:12px; color:#92400E; background:#FEF3C7; border-radius:8px; padding:10px 14px; margin:0;">
                     La table <code>manager_fee_payers_daily</code> n'existe pas encore : lancez <code>php artisan migrate</code> puis <code>php artisan manager:aggregate --from=AAAA-MM-JJ</code>.
@@ -388,9 +416,9 @@ if (!empty($idxMerchant)) {
             @elseif(empty($top_payers))
                 <p style="font-size:12px; color:#9ca3af; margin:0;">Aucun frais payé sur la période (ou période pas encore agrégée).</p>
             @else
-                <div style="{{ $grid2 }}">
+                <div style="{{ $grid2 }} align-items:start;">
                     <div wire:ignore style="position:relative; height:300px;"><canvas id="chartTopPayers"></canvas></div>
-                    <div style="overflow-x:auto;">
+                    <div style="overflow:auto; max-height:{{ max(300, count($top_payers) * 28) }}px;">
                         <table style="width:100%; border-collapse:collapse; font-size:12px;">
                             <thead>
                                 <tr style="background:#F7F8FC;">
@@ -543,6 +571,23 @@ if (!empty($idxMerchant)) {
                 indexAxis: 'y', responsive: true, maintainAspectRatio: false,
                 plugins: { legend: { display: legend, position: 'top' }, tooltip: fdjTooltip('x') },
                 scales: { x: { ticks: fdjTicks }, y: { ticks: { font: { size: 10 } } } }
+            }
+        });
+    }
+
+    // Top payeurs : redessiné seul quand l'utilisateur change le nombre affiché
+    function renderTopPayers(top) {
+        destroyCharts(['topPayers']);
+        const el = document.getElementById('chartTopPayers');
+        if (!el || !top.length) return;
+        el.parentElement.style.height = Math.max(300, top.length * 26) + 'px';
+        charts.topPayers = new Chart(el, {
+            type: 'bar',
+            data: { labels: top.map(r => r.party_name || r.party_id), datasets: [{ label: 'Frais', data: top.map(r => Number(r.fee)), backgroundColor: GREEN }] },
+            options: {
+                indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false }, tooltip: fdjTooltip('x') },
+                scales: { x: { ticks: fdjTicks }, y: { ticks: { font: { size: 10 }, autoSkip: false } } }
             }
         });
     }
@@ -714,20 +759,8 @@ if (!empty($idxMerchant)) {
             });
         }
 
-        // 8. Top 10 des payeurs de frais
-        const top = dash.top_payers || [];
-        const ctxTP = document.getElementById('chartTopPayers');
-        if (ctxTP && top.length) {
-            charts.topPayers = new Chart(ctxTP, {
-                type: 'bar',
-                data: { labels: top.map(r => r.party_name || r.party_id), datasets: [{ label: 'Frais', data: top.map(r => Number(r.fee)), backgroundColor: GREEN }] },
-                options: {
-                    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { display: false }, tooltip: fdjTooltip('x') },
-                    scales: { x: { ticks: fdjTicks }, y: { ticks: { font: { size: 10 } } } }
-                }
-            });
-        }
+        // 8. Top des payeurs de frais
+        renderTopPayers(dash.top_payers || []);
 
         // Répartition des volumes (camembert)
         const types = dash.types || [];
@@ -825,6 +858,13 @@ if (!empty($idxMerchant)) {
     }
 
     // Écoute l'événement émis après la recherche
+    $wire.on('top-payers-updated', (data) => {
+        const payload = Array.isArray(data) ? data[0] : data;
+        requestAnimationFrame(() => {
+            if (typeof Chart !== 'undefined') renderTopPayers(payload.top || []);
+        });
+    });
+
     $wire.on('dashboard-updated', (data) => {
         const payload = Array.isArray(data) ? data[0] : data;
         // requestAnimationFrame garantit que le DOM (canvas) est bien inséré

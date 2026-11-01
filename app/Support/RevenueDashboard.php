@@ -36,7 +36,7 @@ class RevenueDashboard
     private string $to;
     private string $claw;   // txn_index des Commission Claw Back, pour IN (...)
 
-    public function __construct(string $from, string $to)
+    public function __construct(string $from, string $to, private int $topLimit = 10)
     {
         $this->from = $from;
         $this->to   = $to;
@@ -281,8 +281,8 @@ class RevenueDashboard
         ];
     }
 
-    /** 10 comptes qui ont payé le plus de frais (null si la table n'existe pas encore) */
-    private function topPayers(): ?array
+    /** Comptes qui ont payé le plus de frais, 10 à 100 (null si la table n'existe pas encore) */
+    public function topPayers(): ?array
     {
         if (!Schema::hasTable('manager_fee_payers_daily')) {
             return null;
@@ -295,7 +295,7 @@ class RevenueDashboard
              WHERE activity_date BETWEEN ? AND ?
              GROUP BY party_id
              ORDER BY fee DESC
-             LIMIT 10
-        ", [$this->from, $this->to]));
+             LIMIT ?
+        ", [$this->from, $this->to, max(10, min(100, $this->topLimit))]));
     }
 }
