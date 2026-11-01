@@ -27,7 +27,6 @@ new class extends Component {
     public array $serie_jours     = [];   // [{jour, volume, nb}]
     public array $repartition_type = [];  // [{type, volume, nb, revenus}]
     public array $revenus_type     = [];  // [{type, revenus}] : revenu ≠ 0, trié par revenu
-    public array $repartition_canal = []; // [{canal, nb}]
 
     // Comparaison période précédente
     public ?float $volume_precedent = null;
@@ -173,17 +172,6 @@ new class extends Component {
             ORDER BY revenus DESC
         ", [$debut, $fin]));
 
-        // ── Répartition par canal ──
-        $this->repartition_canal = array_map(fn($r) => (array) $r, DB::select("
-            SELECT
-                COALESCE(channel, 'Inconnu') AS canal,
-                COUNT(*)                     AS nb
-            FROM fact_txn_v2
-            WHERE transaction_initiated_time >= ? AND transaction_initiated_time < ?
-            GROUP BY channel
-            ORDER BY nb DESC
-        ", [$debut, $fin]));
-
         // ── Agents actifs (distincts sur cash in) ──
         if (!empty($idxCashin)) {
             $in = implode(',', $idxCashin);
@@ -223,7 +211,6 @@ if (!empty($idxMerchant)) {
             serie:  $this->serie_jours,
             types:   $this->repartition_type,
             revenus: $this->revenus_type,
-            canaux:  $this->repartition_canal,
         );
     }
 
@@ -416,27 +403,19 @@ if (!empty($idxMerchant)) {
             </div>
         </div>
 
-        {{-- CAMEMBERT TYPE + BARRES REVENUS --}}
-        <div style="display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:16px; margin-bottom:16px;">
-            <div wire:ignore style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px;">
-                <p style="font-size:13px; font-weight:600; color:#111827; margin:0 0 16px;">Répartition du valeur par Type de transaction</p>
-                <div style="position:relative; height:280px;">
-                    <canvas id="chartTypes"></canvas>
-                </div>
-            </div>
-            <div wire:ignore style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px;">
-                <p style="font-size:13px; font-weight:600; color:#111827; margin:0 0 16px;">Revenus par type</p>
-                <div style="position:relative; height:280px;">
-                    <canvas id="chartRevenus"></canvas>
-                </div>
+        {{-- CAMEMBERT TYPE --}}
+        <div wire:ignore style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px; margin-bottom:16px;">
+            <p style="font-size:13px; font-weight:600; color:#111827; margin:0 0 16px;">Répartition du valeur par Type de transaction</p>
+            <div style="position:relative; height:280px;">
+                <canvas id="chartTypes"></canvas>
             </div>
         </div>
 
-        {{-- RÉPARTITION CANAL --}}
+        {{-- REVENUS PAR TYPE (pleine largeur) --}}
         <div wire:ignore style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px; margin-bottom:16px;">
-            <p style="font-size:13px; font-weight:600; color:#111827; margin:0 0 16px;">Répartition par canal</p>
-            <div style="position:relative; height:220px;">
-                <canvas id="chartCanaux"></canvas>
+            <p style="font-size:13px; font-weight:600; color:#111827; margin:0 0 16px;">Revenus par type</p>
+            <div style="position:relative; height:280px;">
+                <canvas id="chartRevenus"></canvas>
             </div>
         </div>
 
@@ -542,15 +521,15 @@ if (!empty($idxMerchant)) {
         keys.forEach(k => { if (charts[k]) { charts[k].destroy(); delete charts[k]; } });
     }
 
-    function renderDashboard(serie, types, revenus, canaux) {
+    function renderDashboard(serie, types, revenus) {
         if (typeof Chart === 'undefined') {
             // Chart.js pas encore chargé : on réessaie
-            setTimeout(() => renderDashboard(serie, types, revenus, canaux), 100);
+            setTimeout(() => renderDashboard(serie, types, revenus), 100);
             return;
         }
 
         ensureDatalabelsRegistered();
-        destroyCharts(['evolution', 'types', 'revenus', 'canaux']);
+        destroyCharts(['evolution', 'types', 'revenus']);
 
         const ctxE = document.getElementById('chartEvolution');
         if (ctxE) {
@@ -622,7 +601,7 @@ if (!empty($idxMerchant)) {
         const ctxR = document.getElementById('chartRevenus');
         if (ctxR) {
             // Hauteur selon le nombre de types (une barre lisible par type)
-            ctxR.parentElement.style.height = Math.max(280, revenus.length * 24) + 'px';
+            ctxR.parentElement.style.height = Math.max(280, revenus.length * 28) + 'px';
             const values = revenus.map(r => Number(r.revenus) * 100);
             charts.revenus = new Chart(ctxR, {
                 type: 'bar',
@@ -631,7 +610,7 @@ if (!empty($idxMerchant)) {
                     datasets: [{
                         label: 'Revenus (FDJ)',
                         data: values,
-                        backgroundColor: values.map(v => v < 0 ? '#E24B4A' : '#F5A800'),
+                        backgroundColor: values.map(v => v < 0 ? '#E24B4A' : '#00843D'),
                     }]
                 },
                 options: {
@@ -642,20 +621,6 @@ if (!empty($idxMerchant)) {
             });
         }
 
-        const ctxC = document.getElementById('chartCanaux');
-        if (ctxC) {
-            charts.canaux = new Chart(ctxC, {
-                type: 'pie',
-                data: {
-                    labels: canaux.map(r => r.canal),
-                    datasets: [{
-                        data: canaux.map(r => Number(r.nb)),
-                        backgroundColor: palette,
-                    }]
-                },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { font: { size: 11 } } } } }
-            });
-        }
     }
 
     function renderAirtime(serie, repartition) {
@@ -740,7 +705,7 @@ if (!empty($idxMerchant)) {
         const payload = Array.isArray(data) ? data[0] : data;
         // requestAnimationFrame garantit que le DOM (canvas) est bien inséré
         requestAnimationFrame(() => {
-            renderDashboard(payload.serie || [], payload.types || [], payload.revenus || [], payload.canaux || []);
+            renderDashboard(payload.serie || [], payload.types || [], payload.revenus || []);
         });
     });
 
