@@ -10,8 +10,9 @@ use Illuminate\Support\Facades\DB;
  * Alimente les agrégats du tableau de bord direction.
  *
  * Par journée : fact_txn_v2 → manager_hourly_stats (heure × type × reason ×
- * statut), puis manager_hourly_stats → manager_daily_stats. Idempotent : une
- * journée recalculée remplace l'ancienne.
+ * statut), puis manager_hourly_stats → manager_daily_stats, et fact_txn_v2 →
+ * manager_fee_payers_daily (frais payés par compte, tableau de bord revenue).
+ * Idempotent : une journée recalculée remplace l'ancienne.
  *
  * Montants convertis en FDJ ici (fact_txn_v2 les stocke divisés par 100).
  *
@@ -24,7 +25,8 @@ class AggregateManagerStats extends Command
                             {--date= : Un seul jour (YYYY-MM-DD)}
                             {--from= : Début de plage (YYYY-MM-DD)}
                             {--to= : Fin de plage incluse (YYYY-MM-DD), défaut = dernier jour chargé}
-                            {--all : Tout recalculer depuis la première transaction}';
+                            {--all : Tout recalculer depuis la première transaction}
+                            {--payers-only : Ne remplir que manager_fee_payers_daily (rattrapage), sans toucher aux autres tables}';
 
     protected $description = 'Agrège les transactions par heure et par jour pour le tableau de bord direction';
 
@@ -47,6 +49,9 @@ class AggregateManagerStats extends Command
         } elseif ($this->option('from')) {
             $from = $this->option('from');
             $to   = $this->option('to') ?: $lastLoaded;
+        } elseif ($this->option('payers-only')) {
+            $this->error('Avec --payers-only, précisez la période : --from=AAAA-MM-JJ, --date=AAAA-MM-JJ ou --all.');
+            return self::FAILURE;
         } else {
             $from = DB::table('manager_daily_stats')->max('activity_date');
             $to   = $lastLoaded;
@@ -72,14 +77,16 @@ class AggregateManagerStats extends Command
             return self::FAILURE;
         }
 
-        $days = (int) round($start->diffInDays($end, absolute: true)) + 1;
-        $this->info("Agrégation du {$start->toDateString()} au {$end->toDateString()} ({$days} jour(s))");
+        $days        = (int) round($start->diffInDays($end, absolute: true)) + 1;
+        $payersOnly  = (bool) $this->option('payers-only');
+        $this->info("Agrégation du {$start->toDateString()} au {$end->toDateString()} ({$days} jour(s))"
+            . ($payersOnly ? ' — manager_fee_payers_daily uniquement' : ''));
 
         $bar = $this->output->createProgressBar($days);
         $bar->start();
 
         for ($d = $start->copy(); $d->lte($end); $d->addDay()) {
-            $this->aggregateDay($d->toDateString());
+            $payersOnly ? $this->aggregateFeePayers($d->toDateString()) : $this->aggregateDay($d->toDateString());
             $bar->advance();
         }
 
@@ -128,6 +135,38 @@ class AggregateManagerStats extends Command
                 WHERE activity_date = ?
                 GROUP BY activity_date, txn_index, reason_index, status
             ', [$date]);
+
+            $this->aggregateFeePayers($date);
+        });
+    }
+
+    /** Frais payés par compte (débiteur) sur une journée, transactions terminées avec frais */
+    private function aggregateFeePayers(string $date): void
+    {
+        $start = $date . ' 00:00:00';
+        $end   = Carbon::parse($date)->addDay()->toDateString() . ' 00:00:00';
+        $f     = self::AMOUNT_FACTOR;
+
+        DB::transaction(function () use ($date, $start, $end, $f) {
+            DB::delete('DELETE FROM manager_fee_payers_daily WHERE activity_date = ?', [$date]);
+
+            DB::insert("
+                INSERT INTO manager_fee_payers_daily
+                    (activity_date, party_id, party_type, party_name, txn_count, fee, commission)
+                SELECT ?::date,
+                       debit_party_identifier,
+                       MAX(debit_party_type),
+                       MAX(debit_party_name),
+                       COUNT(*),
+                       SUM(charge_amount) * {$f},
+                       COALESCE(SUM(commission_amount), 0) * {$f}
+                FROM fact_txn_v2
+                WHERE transaction_initiated_time >= ? AND transaction_initiated_time < ?
+                  AND status = 'Completed'
+                  AND charge_amount > 0
+                  AND debit_party_identifier IS NOT NULL
+                GROUP BY debit_party_identifier
+            ", [$date, $start, $end]);
         });
     }
 

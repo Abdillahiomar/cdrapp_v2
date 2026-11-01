@@ -10,7 +10,7 @@ new class extends Component {
     public string $date_fin   = '';
     public bool   $searched   = false;
 
-    // KPIs
+    // KPIs (FDJ, depuis manager_daily_stats)
     public float $volume_total    = 0;
     public int   $nb_transactions = 0;
     public float $revenus         = 0;
@@ -23,10 +23,9 @@ new class extends Component {
     public int $marchands_actifs = 0;
     public int $clients_actifs = 0;
 
-    // Graphiques (données brutes passées au JS)
-    public array $serie_jours     = [];   // [{jour, volume, nb}]
-    public array $repartition_type = [];  // [{type, volume, nb, revenus}]
-    public array $revenus_type     = [];  // [{type, revenus}] : revenu ≠ 0, trié par revenu
+    // Graphiques : données envoyées au JS par l'événement dashboard-updated (RevenueDashboard)
+    public ?array  $top_payers = null;    // tableau du Top 10 ; null = table pas encore créée
+    public ?string $last_date  = null;    // dernier jour agrégé par manager:aggregate
 
     // Comparaison période précédente
     public ?float $volume_precedent = null;
@@ -72,105 +71,14 @@ new class extends Component {
         $idxCashin   = $this->reasonIndexesFor('customer cash in');
         $idxMerchant = $this->reasonIndexesFor('merchant payment');
 
-        // Commission Claw Back : frais et commission à 0, le revenu est le montant de la transaction
-        $idxClawback = \App\Models\TransactionType::where('txn_type_name', 'Commission Claw Back')
-            ->pluck('txn_index')->map(fn($v) => (int) $v)->all() ?: [0];
-        $inClawback  = implode(',', $idxClawback);
+        // ── Cadres et graphiques : agrégats de manager:aggregate (montants en FDJ) ──
+        $dash = (new \App\Support\RevenueDashboard($this->date_debut, $this->date_fin))->build();
 
-        // ── KPIs globaux (une seule passe) ──
-        $kpi = DB::selectOne("
-            SELECT
-                COALESCE(SUM(actual_amount), 0)                                   AS volume_total,
-                COUNT(*)                                                          AS nb_transactions,
-                COALESCE(SUM(charge_amount -commission_amount), 0)              AS revenus,
-                COALESCE(SUM(actual_amount) FILTER (WHERE txn_index IN ($inClawback)), 0) AS total_clawback,
-                COALESCE(AVG(actual_amount), 0)                                  AS ticket_moyen,
-                COALESCE(
-                    100.0 * COUNT(*) FILTER (WHERE status = 'Completed') / NULLIF(COUNT(*), 0),
-                    0
-                )                                                                 AS taux_reussite
-            FROM fact_txn_v2
-            WHERE transaction_initiated_time >= ? AND transaction_initiated_time < ?
-            AND status = 'Completed'
-
-        ", [$debut, $fin]);
-
-        $this->volume_total    = (float) $kpi->volume_total;
-        $this->nb_transactions = (int)   $kpi->nb_transactions;
-        $this->revenus         = (float) $kpi->revenus;
-        $this->total_clawback  = (float) $kpi->total_clawback;
-        $this->ticket_moyen   = (float) $kpi->ticket_moyen;
-        $this->taux_reussite   = (float) $kpi->taux_reussite;
-
-        // ── Comparaison période précédente (même durée, juste avant) ──
-        $jours = Carbon::parse($this->date_debut)->diffInDays(Carbon::parse($this->date_fin)) + 1;
-        $debutPrec = Carbon::parse($this->date_debut)->subDays($jours)->format('Y-m-d') . ' 00:00:00';
-        $finPrec   = $debut;
-
-        $prec = DB::selectOne("
-            SELECT COALESCE(SUM(actual_amount), 0) AS volume
-            FROM fact_txn_v2
-            WHERE transaction_initiated_time >= ? AND transaction_initiated_time < ?
-            AND status = 'Completed'
-        ", [$debutPrec, $finPrec]);
-
-        $this->volume_precedent = (float) $prec->volume;
-        $this->variation_volume = $this->volume_precedent > 0
-            ? (($this->volume_total - $this->volume_precedent) / $this->volume_precedent) * 100
-            : null;
-
-        // ── Série temporelle par jour ──
-        $this->serie_jours = array_map(fn($r) => (array) $r, DB::select("
-            SELECT
-                transaction_initiated_time::date AS jour,
-                COALESCE(SUM(actual_amount), 0)  AS volume,
-                COUNT(*)                         AS nb
-            FROM fact_txn_v2
-            WHERE transaction_initiated_time >= ? AND transaction_initiated_time < ?
-            AND status = 'Completed'
-            GROUP BY transaction_initiated_time::date
-            ORDER BY jour
-        ", [$debut, $fin]));
-
-        // ── Répartition par type d'opération (via reason_types) ──
-        
-
-        // Types à exclure du graphique de répartition
-        $typesExclus = ['E-Money Creation', 'E-Money Destroy', 'Journal Transaction' ,'Org Withdrawal of Funds', 'Org Inter-Transfer'];
-        $placeholders = implode(',', array_fill(0, count($typesExclus), '?'));
-
-        $this->repartition_type = array_map(fn($r) => (array) $r, DB::select("
-            SELECT
-                tt.txn_type_name                              AS type,
-                COALESCE(SUM(f.actual_amount), 0)           AS volume,
-                COUNT(*)                                    AS nb,
-                COALESCE(SUM(f.charge_amount - f.commission_amount ), 0) AS revenus
-            FROM fact_txn_v2 f
-            JOIN transaction_types tt ON tt.txn_index = f.txn_index
-            WHERE f.transaction_initiated_time >= ? AND f.transaction_initiated_time < ?
-            AND tt.txn_type_name NOT IN ($placeholders)
-            AND status = 'Completed'
-            GROUP BY tt.txn_type_name
-            ORDER BY volume DESC
-            LIMIT 15
-        ", array_merge([$debut, $fin], $typesExclus)));
-
-        // ── Revenus par type : tous les types au revenu non nul (positif ou négatif), du plus
-        //    grand au plus petit. Le Commission Claw Back compte pour son montant (cf. Revenu total).
-        $this->revenus_type = array_map(fn($r) => (array) $r, DB::select("
-            SELECT
-                tt.txn_type_name AS type,
-                SUM(CASE WHEN f.txn_index IN ($inClawback) THEN f.actual_amount
-                         ELSE f.charge_amount - f.commission_amount END) AS revenus
-            FROM fact_txn_v2 f
-            JOIN transaction_types tt ON tt.txn_index = f.txn_index
-            WHERE f.transaction_initiated_time >= ? AND f.transaction_initiated_time < ?
-            AND f.status = 'Completed'
-            GROUP BY tt.txn_type_name
-            HAVING SUM(CASE WHEN f.txn_index IN ($inClawback) THEN f.actual_amount
-                            ELSE f.charge_amount - f.commission_amount END) <> 0
-            ORDER BY revenus DESC
-        ", [$debut, $fin]));
+        foreach (['volume_total', 'nb_transactions', 'revenus', 'total_clawback', 'ticket_moyen', 'taux_reussite', 'volume_precedent', 'variation_volume'] as $k) {
+            $this->{$k} = $dash['kpi'][$k];
+        }
+        $this->last_date = $dash['last_date'];
+        unset($dash['kpi']);
 
         // ── Agents actifs (distincts sur cash in) ──
         if (!empty($idxCashin)) {
@@ -206,12 +114,10 @@ if (!empty($idxMerchant)) {
 
         $this->searched = true;
 
+        $this->top_payers = $dash['top_payers'];
+
         // Envoi des données aux graphiques JS
-        $this->dispatch('dashboard-updated',
-            serie:  $this->serie_jours,
-            types:   $this->repartition_type,
-            revenus: $this->revenus_type,
-        );
+        $this->dispatch('dashboard-updated', dash: $dash);
     }
 
     public function searchAirtime()
@@ -328,12 +234,18 @@ if (!empty($idxMerchant)) {
         </div>
     @else
 
+        @if($last_date && $last_date < $date_fin)
+            <div style="background:#FEF3C7; color:#92400E; border:1px solid #FCD34D; border-radius:8px; padding:10px 14px; font-size:12px; margin-bottom:16px;">
+                Les chiffres viennent des agrégats calculés chaque nuit : ils s'arrêtent au <strong>{{ \Carbon\Carbon::parse($last_date)->format('d/m/Y') }}</strong> (dernier jour agrégé).
+            </div>
+        @endif
+
         {{-- KPIs PRINCIPAUX --}}
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:16px;">
 
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #00843D;">
                 <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Valeur total</p>
-                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format($volume_total * 100, 0, ',', ' ') }}</p>
+                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format($volume_total, 0, ',', ' ') }}</p>
                 <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">FDJ</p>
                 @if($variation_volume !== null)
                     <p style="font-size:11px; font-weight:600; margin:6px 0 0; color:{{ $variation_volume >= 0 ? '#005C2B' : '#7F1D1D' }};">
@@ -350,25 +262,25 @@ if (!empty($idxMerchant)) {
 
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #F5A800;">
                 <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Revenus</p>
-                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format($revenus * 100, 0, ',', ' ') }}</p>
+                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format($revenus, 0, ',', ' ') }}</p>
                 <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">FDJ (frais - commission)</p>
             </div>
 
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #0EA5E9;">
                 <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Total Claw Back</p>
-                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format($total_clawback * 100, 0, ',', ' ') }}</p>
+                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format($total_clawback, 0, ',', ' ') }}</p>
                 <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">FDJ (Commission Claw Back)</p>
             </div>
 
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #005C2B;">
                 <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Revenu total</p>
-                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format(($revenus + $total_clawback) * 100, 0, ',', ' ') }}</p>
+                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format($revenus + $total_clawback, 0, ',', ' ') }}</p>
                 <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">FDJ (revenus + claw back)</p>
             </div>
 
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-top:3px solid #9333ea;">
                 <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">Ticket moyen</p>
-                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format($ticket_moyen * 100, 0, ',', ' ') }}</p>
+                <p style="font-size:22px; font-weight:700; color:#111827; margin:0;">{{ number_format($ticket_moyen, 0, ',', ' ') }}</p>
                 <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">FDJ / transaction</p>
             </div>
 
@@ -395,28 +307,121 @@ if (!empty($idxMerchant)) {
             </div>
         </div>
 
+        @php
+            $card  = 'background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px; margin-bottom:16px; min-width:0;';
+            $title = 'font-size:13px; font-weight:600; color:#111827; margin:0 0 4px;';
+            $sub   = 'font-size:11px; color:#9ca3af; margin:0 0 14px;';
+            $grid2 = 'display:grid; grid-template-columns:repeat(auto-fit, minmax(420px, 1fr)); gap:16px;';
+        @endphp
+
         {{-- COURBE ÉVOLUTION --}}
-        <div wire:ignore style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px; margin-bottom:16px;">
-            <p style="font-size:13px; font-weight:600; color:#111827; margin:0 0 16px;">Évolution du volume et du nombre de transactions</p>
-            <div style="position:relative; height:300px;">
-                <canvas id="chartEvolution"></canvas>
+        <div wire:ignore style="{{ $card }}">
+            <p style="{{ $title }}">Évolution du volume et du nombre de transactions</p>
+            <p style="{{ $sub }}">Transactions terminées, par jour</p>
+            <div style="position:relative; height:300px;"><canvas id="chartEvolution"></canvas></div>
+        </div>
+
+        {{-- 1. ÉVOLUTION DU REVENU --}}
+        <div wire:ignore style="{{ $card }}">
+            <p style="{{ $title }}">Évolution du revenu par jour</p>
+            <p style="{{ $sub }}">Frais encaissés, commissions versées, claw back et revenu net (frais − commissions + claw back)</p>
+            <div style="position:relative; height:300px;"><canvas id="chartRevenueDaily"></canvas></div>
+        </div>
+
+        {{-- 5. CUMUL DU MOIS + 3. COMPOSITION --}}
+        <div style="{{ $grid2 }}">
+            <div wire:ignore style="{{ $card }}">
+                <p style="{{ $title }}">Revenu cumulé du mois et projection</p>
+                <p style="{{ $sub }}" id="cumulSubtitle">Mois de la date de fin</p>
+                <div style="position:relative; height:280px;"><canvas id="chartCumul"></canvas></div>
             </div>
+            <div wire:ignore style="{{ $card }}">
+                <p style="{{ $title }}">Composition du revenu par famille</p>
+                <p style="{{ $sub }}">Revenu net de chaque famille de types (les familles en perte sont en rouge)</p>
+                <div style="position:relative; height:280px;"><canvas id="chartFamilies"></canvas></div>
+            </div>
+        </div>
+
+        {{-- REVENUS PAR TYPE --}}
+        <div wire:ignore style="{{ $card }}">
+            <p style="{{ $title }}">Revenus par type</p>
+            <p style="{{ $sub }}">Types au revenu non nul, du plus grand au plus petit</p>
+            <div style="position:relative; height:280px;"><canvas id="chartRevenus"></canvas></div>
+        </div>
+
+        {{-- 2. FRAIS VS COMMISSIONS --}}
+        <div wire:ignore style="{{ $card }}">
+            <p style="{{ $title }}">Frais encaissés vs commissions versées, par type</p>
+            <p style="{{ $sub }}">Un type est en perte quand ses commissions dépassent ses frais</p>
+            <div style="position:relative; height:280px;"><canvas id="chartFeeCommission"></canvas></div>
+        </div>
+
+        {{-- 4. COMPARAISON PÉRIODE PRÉCÉDENTE --}}
+        <div wire:ignore style="{{ $card }}">
+            <p style="{{ $title }}">Revenu par type : comparaison avec la période précédente</p>
+            <p style="{{ $sub }}" id="comparisonSubtitle">Période précédente de même durée</p>
+            <div style="position:relative; height:280px;"><canvas id="chartComparison"></canvas></div>
+        </div>
+
+        {{-- 6. REVENU MOYEN + 7. PAR HEURE --}}
+        <div style="{{ $grid2 }}">
+            <div wire:ignore style="{{ $card }}">
+                <p style="{{ $title }}">Revenu moyen par transaction, par type</p>
+                <p style="{{ $sub }}">Revenu du type ÷ nombre de transactions terminées (FDJ)</p>
+                <div style="position:relative; height:280px;"><canvas id="chartAvgTxn"></canvas></div>
+            </div>
+            <div wire:ignore style="{{ $card }}">
+                <p style="{{ $title }}">Revenu par heure de la journée</p>
+                <p style="{{ $sub }}">Revenu net cumulé sur la période, par heure</p>
+                <div style="position:relative; height:280px;"><canvas id="chartHourly"></canvas></div>
+            </div>
+        </div>
+
+        {{-- 8. TOP 10 DES PAYEURS DE FRAIS --}}
+        <div style="{{ $card }}">
+            <p style="{{ $title }}">Top 10 des payeurs de frais</p>
+            <p style="{{ $sub }}">Comptes (débiteurs) qui ont payé le plus de frais sur la période</p>
+            @if($top_payers === null)
+                <p style="font-size:12px; color:#92400E; background:#FEF3C7; border-radius:8px; padding:10px 14px; margin:0;">
+                    La table <code>manager_fee_payers_daily</code> n'existe pas encore : lancez <code>php artisan migrate</code> puis <code>php artisan manager:aggregate --from=AAAA-MM-JJ</code>.
+                </p>
+            @elseif(empty($top_payers))
+                <p style="font-size:12px; color:#9ca3af; margin:0;">Aucun frais payé sur la période (ou période pas encore agrégée).</p>
+            @else
+                <div style="{{ $grid2 }}">
+                    <div wire:ignore style="position:relative; height:300px;"><canvas id="chartTopPayers"></canvas></div>
+                    <div style="overflow-x:auto;">
+                        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                            <thead>
+                                <tr style="background:#F7F8FC;">
+                                    @foreach(['#', 'Compte', 'Nom', 'Type', 'Txn', 'Frais (FDJ)'] as $th)
+                                        <th style="padding:8px 10px; text-align:{{ in_array($th, ['Txn', 'Frais (FDJ)']) ? 'right' : 'left' }}; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">{{ $th }}</th>
+                                    @endforeach
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach($top_payers as $i => $p)
+                                    <tr style="border-bottom:1px solid #f3f4f6;">
+                                        <td style="padding:8px 10px; color:#9ca3af;">{{ $i + 1 }}</td>
+                                        <td style="padding:8px 10px; font-family:monospace; color:#111827;">{{ $p['party_id'] }}</td>
+                                        <td style="padding:8px 10px; color:#111827;">{{ $p['party_name'] ?: '—' }}</td>
+                                        <td style="padding:8px 10px; color:#6b7280;">{{ $p['party_type'] === 'Organization' ? 'Organisation' : 'Client' }}</td>
+                                        <td style="padding:8px 10px; text-align:right; color:#6b7280;">{{ number_format($p['nb'], 0, ',', ' ') }}</td>
+                                        <td style="padding:8px 10px; text-align:right; font-weight:700; color:#00843D;">{{ number_format($p['fee'], 0, ',', ' ') }}</td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            @endif
         </div>
 
         {{-- CAMEMBERT TYPE --}}
-        <div wire:ignore style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px; margin-bottom:16px;">
-            <p style="font-size:13px; font-weight:600; color:#111827; margin:0 0 16px;">Répartition du valeur par Type de transaction</p>
-            <div style="position:relative; height:280px;">
-                <canvas id="chartTypes"></canvas>
-            </div>
-        </div>
-
-        {{-- REVENUS PAR TYPE (pleine largeur) --}}
-        <div wire:ignore style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px; margin-bottom:16px;">
-            <p style="font-size:13px; font-weight:600; color:#111827; margin:0 0 16px;">Revenus par type</p>
-            <div style="position:relative; height:280px;">
-                <canvas id="chartRevenus"></canvas>
-            </div>
+        <div wire:ignore style="{{ $card }}">
+            <p style="{{ $title }}">Répartition du valeur par Type de transaction</p>
+            <p style="{{ $sub }}">15 premiers types en valeur (hors mouvements internes de monnaie électronique)</p>
+            <div style="position:relative; height:280px;"><canvas id="chartTypes"></canvas></div>
         </div>
 
     @endif
@@ -521,15 +526,38 @@ if (!empty($idxMerchant)) {
         keys.forEach(k => { if (charts[k]) { charts[k].destroy(); delete charts[k]; } });
     }
 
-    function renderDashboard(serie, types, revenus) {
+    const GREEN = '#00843D', RED = '#E24B4A', NAVY = '#1B2F6E', AMBER = '#F5A800', SKY = '#0EA5E9';
+    const signColor = (values) => values.map(v => v < 0 ? RED : GREEN);
+    const fdjTooltip = (axis) => ({ callbacks: { label: (c) => ' ' + (c.dataset.label ? c.dataset.label + ' : ' : '') + formatFdj(c.parsed[axis]) + ' FDJ' } });
+    const fdjTicks = { callback: (v) => new Intl.NumberFormat('fr-FR', { notation: 'compact', maximumFractionDigits: 1 }).format(v) };
+
+    // Barres horizontales par type : hauteur selon le nombre de lignes
+    function typeBars(key, id, labels, datasets, legend = false) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.parentElement.style.height = Math.max(280, labels.length * 28 * (datasets.length > 1 ? 1.4 : 1)) + 'px';
+        charts[key] = new Chart(el, {
+            type: 'bar',
+            data: { labels, datasets },
+            options: {
+                indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: legend, position: 'top' }, tooltip: fdjTooltip('x') },
+                scales: { x: { ticks: fdjTicks }, y: { ticks: { font: { size: 10 } } } }
+            }
+        });
+    }
+
+    function renderDashboard(dash) {
         if (typeof Chart === 'undefined') {
             // Chart.js pas encore chargé : on réessaie
-            setTimeout(() => renderDashboard(serie, types, revenus), 100);
+            setTimeout(() => renderDashboard(dash), 100);
             return;
         }
 
         ensureDatalabelsRegistered();
-        destroyCharts(['evolution', 'types', 'revenus']);
+        destroyCharts(['evolution', 'types', 'revenus', 'revenueDaily', 'cumul', 'families', 'feeCommission', 'comparison', 'avgTxn', 'hourly', 'topPayers']);
+
+        const serie = dash.serie || [];
 
         const ctxE = document.getElementById('chartEvolution');
         if (ctxE) {
@@ -540,7 +568,7 @@ if (!empty($idxMerchant)) {
                     datasets: [
                         {
                             label: 'Valeur (FDJ)',
-                            data: serie.map(r => Number(r.volume) * 100),
+                            data: serie.map(r => Number(r.volume)),
                             backgroundColor: 'rgba(0,132,61,0.6)',
                             yAxisID: 'y',
                             datalabels: {
@@ -583,6 +611,126 @@ if (!empty($idxMerchant)) {
             });
         }
 
+        // 1. Évolution du revenu par jour
+        const ctxRD = document.getElementById('chartRevenueDaily');
+        if (ctxRD) {
+            charts.revenueDaily = new Chart(ctxRD, {
+                type: 'bar',
+                data: {
+                    labels: serie.map(r => r.jour),
+                    datasets: [
+                        { label: 'Frais', data: serie.map(r => Number(r.fee)), backgroundColor: 'rgba(0,132,61,0.55)', order: 2 },
+                        { label: 'Commissions', data: serie.map(r => -Number(r.commission)), backgroundColor: 'rgba(226,75,74,0.55)', order: 2 },
+                        { label: 'Claw back', data: serie.map(r => Number(r.clawback)), backgroundColor: SKY, order: 2 },
+                        { label: 'Revenu net', data: serie.map(r => Number(r.net)), type: 'line', borderColor: NAVY, backgroundColor: NAVY, tension: 0.3, order: 1 },
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+                    plugins: { tooltip: fdjTooltip('y') },
+                    scales: { x: { stacked: true }, y: { stacked: true, ticks: fdjTicks } }
+                }
+            });
+        }
+
+        // 5. Revenu cumulé du mois + projection
+        const cumul = dash.cumul;
+        const ctxCu = document.getElementById('chartCumul');
+        if (ctxCu && cumul) {
+            const sub = document.getElementById('cumulSubtitle');
+            if (sub) sub.textContent = cumul.month + ' : ' + formatFdj(cumul.total) + ' FDJ sur ' + cumul.elapsed + ' jour(s), projection fin de mois ' + formatFdj(cumul.projected) + ' FDJ';
+            charts.cumul = new Chart(ctxCu, {
+                type: 'line',
+                data: {
+                    labels: cumul.labels,
+                    datasets: [
+                        { label: 'Revenu cumulé', data: cumul.actual, borderColor: GREEN, backgroundColor: 'rgba(0,132,61,0.12)', fill: true, tension: 0.2, pointRadius: 2 },
+                        { label: 'Projection', data: cumul.projection, borderColor: AMBER, borderDash: [6, 4], pointRadius: 0, tension: 0 },
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+                    plugins: { tooltip: fdjTooltip('y') },
+                    scales: { x: { title: { display: true, text: 'Jour du mois' } }, y: { ticks: fdjTicks } }
+                }
+            });
+        }
+
+        // 3. Composition par famille (barres : une famille peut être en perte)
+        const fam = dash.families || [];
+        const ctxF = document.getElementById('chartFamilies');
+        if (ctxF) {
+            const values = fam.map(r => Number(r.revenue));
+            charts.families = new Chart(ctxF, {
+                type: 'bar',
+                data: { labels: fam.map(r => r.family), datasets: [{ label: 'Revenu net', data: values, backgroundColor: signColor(values) }] },
+                options: {
+                    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: fdjTooltip('x') },
+                    scales: { x: { ticks: fdjTicks } }
+                }
+            });
+        }
+
+        // Revenus par type
+        const rev = dash.revenus_type || [];
+        const revValues = rev.map(r => Number(r.revenus));
+        typeBars('revenus', 'chartRevenus', rev.map(r => r.type), [{ label: 'Revenu', data: revValues, backgroundColor: signColor(revValues) }]);
+
+        // 2. Frais vs commissions
+        const fc = dash.fee_commission || [];
+        typeBars('feeCommission', 'chartFeeCommission', fc.map(r => r.type), [
+            { label: 'Frais encaissés', data: fc.map(r => Number(r.fee)), backgroundColor: GREEN },
+            { label: 'Commissions versées', data: fc.map(r => Number(r.commission)), backgroundColor: RED },
+        ], true);
+
+        // 4. Comparaison avec la période précédente
+        const cmp = dash.comparison || { rows: [] };
+        const cmpSub = document.getElementById('comparisonSubtitle');
+        if (cmpSub && cmp.previous_label) cmpSub.textContent = 'Période choisie vs période précédente de même durée (' + cmp.previous_label + ')';
+        typeBars('comparison', 'chartComparison', cmp.rows.map(r => r.type), [
+            { label: 'Période choisie', data: cmp.rows.map(r => Number(r.current)), backgroundColor: GREEN },
+            { label: 'Période précédente', data: cmp.rows.map(r => Number(r.previous)), backgroundColor: '#9CA3AF' },
+        ], true);
+
+        // 6. Revenu moyen par transaction
+        const avg = dash.avg_per_txn || [];
+        const avgValues = avg.map(r => Number(r.avg));
+        typeBars('avgTxn', 'chartAvgTxn', avg.map(r => r.type), [{ label: 'Revenu moyen', data: avgValues, backgroundColor: signColor(avgValues) }]);
+
+        // 7. Revenu par heure
+        const hrs = dash.hourly || [];
+        const ctxH = document.getElementById('chartHourly');
+        if (ctxH) {
+            const values = hrs.map(r => Number(r.net));
+            charts.hourly = new Chart(ctxH, {
+                type: 'bar',
+                data: { labels: hrs.map(r => String(r.hour).padStart(2, '0') + 'h'), datasets: [{ label: 'Revenu net', data: values, backgroundColor: signColor(values) }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: fdjTooltip('y') },
+                    scales: { y: { ticks: fdjTicks } }
+                }
+            });
+        }
+
+        // 8. Top 10 des payeurs de frais
+        const top = dash.top_payers || [];
+        const ctxTP = document.getElementById('chartTopPayers');
+        if (ctxTP && top.length) {
+            charts.topPayers = new Chart(ctxTP, {
+                type: 'bar',
+                data: { labels: top.map(r => r.party_name || r.party_id), datasets: [{ label: 'Frais', data: top.map(r => Number(r.fee)), backgroundColor: GREEN }] },
+                options: {
+                    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: fdjTooltip('x') },
+                    scales: { x: { ticks: fdjTicks }, y: { ticks: { font: { size: 10 } } } }
+                }
+            });
+        }
+
+        // Répartition des volumes (camembert)
+        const types = dash.types || [];
         const ctxT = document.getElementById('chartTypes');
         if (ctxT) {
             charts.types = new Chart(ctxT, {
@@ -590,37 +738,13 @@ if (!empty($idxMerchant)) {
                 data: {
                     labels: types.map(r => r.type),
                     datasets: [{
-                        data: types.map(r => Number(r.volume) * 100),
+                        data: types.map(r => Number(r.volume)),
                         backgroundColor: palette,
                     }]
                 },
                 options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { font: { size: 10 } } } } }
             });
         }
-
-        const ctxR = document.getElementById('chartRevenus');
-        if (ctxR) {
-            // Hauteur selon le nombre de types (une barre lisible par type)
-            ctxR.parentElement.style.height = Math.max(280, revenus.length * 28) + 'px';
-            const values = revenus.map(r => Number(r.revenus) * 100);
-            charts.revenus = new Chart(ctxR, {
-                type: 'bar',
-                data: {
-                    labels: revenus.map(r => r.type),
-                    datasets: [{
-                        label: 'Revenus (FDJ)',
-                        data: values,
-                        backgroundColor: values.map(v => v < 0 ? '#E24B4A' : '#00843D'),
-                    }]
-                },
-                options: {
-                    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => ' ' + formatFdj(c.parsed.x) + ' FDJ' } } },
-                    scales: { x: { ticks: { callback: (v) => formatFdj(v) } }, y: { ticks: { font: { size: 10 } } } }
-                }
-            });
-        }
-
     }
 
     function renderAirtime(serie, repartition) {
@@ -705,7 +829,7 @@ if (!empty($idxMerchant)) {
         const payload = Array.isArray(data) ? data[0] : data;
         // requestAnimationFrame garantit que le DOM (canvas) est bien inséré
         requestAnimationFrame(() => {
-            renderDashboard(payload.serie || [], payload.types || [], payload.revenus || []);
+            renderDashboard(payload.dash || {});
         });
     });
 
