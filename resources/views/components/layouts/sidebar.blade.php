@@ -407,7 +407,7 @@
                 </a>
             @endcan
 
-            @role('super-admin' || 'admin')
+            @role('super-admin')
                 <a href="{{ route('admin.employees.index') }}" wire:navigate
                    style="{{ request()->routeIs('admin.employees.*') ? $linkActive : $linkInactive }}">
                     <svg width="15" height="15" viewBox="0 0 16 16" style="flex-shrink:0;">
