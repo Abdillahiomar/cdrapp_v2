@@ -4,16 +4,20 @@ use App\Jobs\ComputeDrawEligibles;
 use App\Models\Draw;
 use App\Models\DrawPrize;
 use App\Models\DrawWinner;
+use App\Models\Prize;
 use App\Support\DrawEngine;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
 /**
- * Un tirage au sort, en 4 étapes : critères et options → lots → liste des
- * éligibles figée (job de queue) → tirage, puis gestion des gagnants écartés
- * et clôture. Consultation : draws.view ; actions : draws.manage.
+ * Un tirage au sort, en 4 étapes : critères et options → lots (choisis dans le
+ * catalogue) → liste des éligibles figée (job de queue) → tirage lot par lot,
+ * chaque gagnant annoncé dans une fenêtre. Puis gestion des gagnants écartés et
+ * clôture. Consultation : draws.view ; actions : draws.manage.
  */
 new class extends Component {
     use WithPagination;
@@ -25,14 +29,18 @@ new class extends Component {
 
     public bool  $showPrizeForm  = false;
     public ?int  $editingPrizeId = null;
-    public array $prizeForm      = ['name' => '', 'quantity' => 1, 'substitutes' => 0];
+    public array $prizeForm      = ['prize_id' => '', 'quantity' => 1, 'substitutes' => 0];
 
     public string $participantSearch = '';
 
     public ?int   $invalidatingId = null;
     public string $invalidReason  = '';
 
+    public ?int $revealId = null;   // gagnant affiché dans la fenêtre de résultat
+
     public ?array $verifyResult = null;
+
+    private bool $failed = false;
 
     /** Le middleware de route ne couvre pas les appels Livewire suivants */
     public function boot(): void
@@ -56,10 +64,11 @@ new class extends Component {
             'period_end'           => $d->period_end->format('Y-m-d'),
             'txn_indexes'          => array_map('strval', $d->txn_indexes ?? []),
             'min_txn_count'        => $d->min_txn_count,
-            'min_amount'           => (float) $d->min_amount,
+            'min_txn_amount'       => (float) $d->min_txn_amount,
             'chance_mode'          => $d->chance_mode,
             'one_prize_per_client' => $d->one_prize_per_client,
             'exclude_employees'    => $d->exclude_employees,
+            'exclude_rds_lite'     => $d->exclude_rds_lite,
             'exclude_winners_days' => $d->exclude_winners_days,
             'blacklist'            => (string) $d->blacklist,
         ];
@@ -74,8 +83,6 @@ new class extends Component {
     {
         return app(DrawEngine::class);
     }
-
-    private bool $failed = false;
 
     /** Exécute une action du moteur et affiche son erreur métier au lieu d'une page 500 */
     private function attempt(callable $action, ?string $success = null): mixed
@@ -115,7 +122,7 @@ new class extends Component {
             'form.period_end'           => 'required|date|after_or_equal:form.period_start',
             'form.txn_indexes'          => 'required|array|min:1',
             'form.min_txn_count'        => 'required|integer|min:1',
-            'form.min_amount'           => 'required|numeric|min:0',
+            'form.min_txn_amount'       => 'required|numeric|min:0',
             'form.chance_mode'          => 'required|in:' . implode(',', array_keys(Draw::CHANCE_MODES)),
             'form.exclude_winners_days' => 'nullable|integer|min:1|max:3650',
             'form.blacklist'            => 'nullable|string|max:20000',
@@ -134,10 +141,11 @@ new class extends Component {
             'period_end'           => $this->form['period_end'],
             'txn_indexes'          => array_values(array_map('intval', $this->form['txn_indexes'])),
             'min_txn_count'        => (int) $this->form['min_txn_count'],
-            'min_amount'           => (float) $this->form['min_amount'],
+            'min_txn_amount'       => (float) $this->form['min_txn_amount'],
             'chance_mode'          => $this->form['chance_mode'],
             'one_prize_per_client' => (bool) $this->form['one_prize_per_client'],
             'exclude_employees'    => (bool) $this->form['exclude_employees'],
+            'exclude_rds_lite'     => (bool) $this->form['exclude_rds_lite'],
             'exclude_winners_days' => $this->form['exclude_winners_days'] ?: null,
             'blacklist'            => trim($this->form['blacklist']) ?: null,
             'error'                => null,
@@ -150,13 +158,13 @@ new class extends Component {
         return true;
     }
 
-    // ── Étape 2 : lots ────────────────────────────────────────────────────
+    // ── Étape 2 : lots (choisis dans le catalogue) ────────────────────────
 
     public function createPrize(): void
     {
         $this->authorizeManage();
         $this->editingPrizeId = null;
-        $this->prizeForm      = ['name' => '', 'quantity' => 1, 'substitutes' => 0];
+        $this->prizeForm      = ['prize_id' => '', 'quantity' => 1, 'substitutes' => 0];
         $this->showPrizeForm  = true;
         $this->resetErrorBag();
     }
@@ -166,7 +174,7 @@ new class extends Component {
         $this->authorizeManage();
         $prize                = $this->draw->prizes()->findOrFail($id);
         $this->editingPrizeId = $prize->id;
-        $this->prizeForm      = ['name' => $prize->name, 'quantity' => $prize->quantity, 'substitutes' => $prize->substitutes];
+        $this->prizeForm      = ['prize_id' => (string) $prize->prize_id, 'quantity' => $prize->quantity, 'substitutes' => $prize->substitutes];
         $this->showPrizeForm  = true;
         $this->resetErrorBag();
     }
@@ -176,32 +184,61 @@ new class extends Component {
         $this->authorizeManage();
 
         if ($this->draw->isDrawn()) {
-            session()->flash('error', 'Le tirage a eu lieu : les lots ne sont plus modifiables.');
+            session()->flash('error', 'Le tirage a commencé : les lots ne sont plus modifiables.');
             return;
         }
 
         $this->validate([
-            'prizeForm.name'        => 'required|string|max:255',
+            'prizeForm.prize_id'    => 'required|exists:prizes,id',
             'prizeForm.quantity'    => 'required|integer|min:1|max:10000',
             'prizeForm.substitutes' => 'required|integer|min:0|max:100',
         ], [
-            'prizeForm.name.required' => 'Le libellé du lot est obligatoire.',
-            'prizeForm.quantity.min'  => 'Au moins 1.',
+            'prizeForm.prize_id.required' => 'Choisissez un lot du catalogue.',
+            'prizeForm.quantity.min'      => 'Au moins 1.',
         ]);
 
+        $catalog = Prize::with(['category', 'mainImage'])->findOrFail($this->prizeForm['prize_id']);
+        $current = $this->editingPrizeId ? $this->draw->prizes()->findOrFail($this->editingPrizeId) : null;
+
         $data = [
-            'name'        => trim($this->prizeForm['name']),
             'quantity'    => (int) $this->prizeForm['quantity'],
             'substitutes' => (int) $this->prizeForm['substitutes'],
         ];
 
-        if ($this->editingPrizeId) {
-            $this->draw->prizes()->findOrFail($this->editingPrizeId)->update($data);
-        } else {
-            $this->draw->prizes()->create($data + ['position' => (int) $this->draw->prizes()->max('position') + 1]);
+        // Copie du lot (nom, catégorie, image) : le PV reste juste si le catalogue change ensuite
+        if (!$current || $current->prize_id !== $catalog->id) {
+            $data += [
+                'prize_id'       => $catalog->id,
+                'name'           => $catalog->name,
+                'category_name'  => $catalog->category->name,
+                'category_color' => $catalog->category->color,
+                'image_path'     => $this->copyImage($catalog),
+            ];
+            if ($current?->image_path) {
+                Storage::disk('local')->delete($current->image_path);
+            }
         }
 
+        $current
+            ? $current->update($data)
+            : $this->draw->prizes()->create($data + ['position' => (int) $this->draw->prizes()->max('position') + 1]);
+
         $this->showPrizeForm = false;
+    }
+
+    private function copyImage(Prize $catalog): ?string
+    {
+        $source = $catalog->mainImage?->path;
+        $disk   = Storage::disk('local');
+
+        if (!$source || !$disk->exists($source)) {
+            return null;
+        }
+
+        $target = 'draws/' . $this->draw->id . '/' . Str::uuid() . '.' . pathinfo($source, PATHINFO_EXTENSION);
+        $disk->copy($source, $target);
+
+        return $target;
     }
 
     public function deletePrize(int $id): void
@@ -209,11 +246,15 @@ new class extends Component {
         $this->authorizeManage();
 
         if (!$this->draw->isDrawn()) {
-            $this->draw->prizes()->findOrFail($id)->delete();
+            $prize = $this->draw->prizes()->findOrFail($id);
+            if ($prize->image_path) {
+                Storage::disk('local')->delete($prize->image_path);
+            }
+            $prize->delete();
         }
     }
 
-    /** Monte ou descend un lot dans l'ordre de tirage */
+    /** Monte ou descend un lot dans la liste */
     public function movePrize(int $id, int $direction): void
     {
         $this->authorizeManage();
@@ -266,12 +307,21 @@ new class extends Component {
         $this->resetPage('participants');
     }
 
-    // ── Étape 4 : tirage ──────────────────────────────────────────────────
+    // ── Étape 4 : tirage lot par lot ──────────────────────────────────────
 
-    public function runDraw(): void
+    /** Tire un gagnant pour ce lot et l'annonce dans la fenêtre de résultat */
+    public function drawPrize(int $prizeId): void
     {
         $this->authorizeManage();
-        $this->attempt(fn () => $this->engine()->run($this->draw, auth()->id()), 'Tirage effectué.');
+        $prize  = $this->draw->prizes()->findOrFail($prizeId);
+        $winner = $this->attempt(fn () => $this->engine()->drawOne($prize, auth()->id()));
+
+        $this->revealId = $winner?->id;
+    }
+
+    public function closeReveal(): void
+    {
+        $this->revealId = null;
     }
 
     public function askInvalidate(int $id): void
@@ -287,10 +337,9 @@ new class extends Component {
         $this->authorizeManage();
         $this->validate(['invalidReason' => 'required|string|min:3|max:500'], ['invalidReason.required' => 'Le motif est obligatoire.']);
 
-        $winner = $this->draw->winners()->findOrFail($this->invalidatingId);
+        $winner       = $this->draw->winners()->findOrFail($this->invalidatingId);
         $wasEffective = $winner->isEffective();
-
-        $substitute = $this->attempt(fn () => $this->engine()->invalidate($winner, trim($this->invalidReason), auth()->id()));
+        $substitute   = $this->attempt(fn () => $this->engine()->invalidate($winner, trim($this->invalidReason), auth()->id()));
 
         if (!$this->failed) {
             session()->flash('success', match (true) {
@@ -311,7 +360,7 @@ new class extends Component {
 
         if (!$this->failed) {
             $extra
-                ? session()->flash('success', 'Tirage complémentaire : ' . DrawEngine::display($extra->msisdn) . ' remplace le gagnant écarté.')
+                ? $this->revealId = $extra->id
                 : session()->flash('error', 'Plus aucun client éligible disponible pour ce lot.');
         }
     }
@@ -325,7 +374,7 @@ new class extends Component {
     {
         $this->authorizeManage();
 
-        if ($this->draw->status === 'drawn') {
+        if (in_array($this->draw->status, ['drawing', 'drawn'], true)) {
             $this->draw->update(['status' => 'closed', 'closed_by' => auth()->id(), 'closed_at' => Carbon::now()]);
             session()->flash('success', 'Tirage clôturé : il est désormais en lecture seule.');
         }
@@ -336,10 +385,11 @@ new class extends Component {
         $this->authorizeManage();
 
         if ($this->draw->isDrawn()) {
-            session()->flash('error', 'Un tirage effectué ne peut pas être supprimé (traçabilité).');
+            session()->flash('error', 'Un tirage commencé ne peut pas être supprimé (traçabilité).');
             return;
         }
 
+        Storage::disk('local')->deleteDirectory('draws/' . $this->draw->id);
         $this->draw->delete();
         $this->redirectRoute('draws.index', navigate: true);
     }
@@ -358,7 +408,7 @@ new class extends Component {
         $winners = $prizes->flatMap->winners;
 
         $participants = null;
-        if (in_array($draw->status, ['ready', 'drawn', 'closed'], true)) {
+        if (in_array($draw->status, ['ready', 'drawing', 'drawn', 'closed'], true)) {
             $participants = DB::table('draw_participants')
                 ->where('draw_id', $draw->id)
                 ->when($this->participantSearch, fn ($q) => $q->where(fn ($q) => $q
@@ -369,6 +419,17 @@ new class extends Component {
                 ->paginate(15, ['*'], 'participants');
         }
 
+        // Catalogue proposé dans la fenêtre « Ajouter un lot » (lots actifs + celui déjà choisi)
+        $catalog = $this->showPrizeForm
+            ? Prize::with(['category', 'mainImage'])
+                ->where(fn ($q) => $q->where('is_active', true)->orWhere('id', (int) $this->prizeForm['prize_id']))
+                ->get()
+                ->sortBy(fn ($p) => [$p->category->position, $p->category->name, $p->name])
+                ->groupBy(fn ($p) => $p->category->name)
+            : collect();
+
+        $reveal = $this->revealId ? $winners->firstWhere('id', $this->revealId) : null;
+
         return [
             'types'        => $types,
             'typeNames'    => $allTypes->whereIn('txn_index', $selected)->pluck('txn_type_name'),
@@ -378,6 +439,12 @@ new class extends Component {
             'effective'    => $winners->filter->isEffective()->count(),
             'replacedIds'  => $winners->pluck('replaces_id')->filter()->flip(),
             'participants' => $participants,
+            'catalog'      => $catalog,
+            'selectedCatalog' => $this->showPrizeForm && $this->prizeForm['prize_id']
+                ? $catalog->flatten()->firstWhere('id', (int) $this->prizeForm['prize_id'])
+                : null,
+            'reveal'       => $reveal,
+            'revealPrize'  => $reveal ? $prizes->firstWhere('id', $reveal->draw_prize_id) : null,
             'canManage'    => auth()->user()->can('draws.manage'),
         ];
     }
@@ -394,8 +461,10 @@ new class extends Component {
     $btnLight   = 'background:#E8ECF8; color:#1B2F6E; font-size:12px; font-weight:600; padding:8px 14px; border-radius:8px; border:none; cursor:pointer; text-decoration:none; display:inline-block;';
     $btnDanger  = 'background:#FDECEC; color:#B42318; font-size:11px; font-weight:600; padding:5px 10px; border-radius:6px; border:none; cursor:pointer;';
     $step       = fn ($n, $done) => '<span style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:11px; font-size:11px; font-weight:700; margin-right:8px; ' . ($done ? 'background:#00843D; color:#fff;' : 'background:#E8ECF8; color:#1B2F6E;') . '">' . ($done ? '✓' : $n) . '</span>';
+    $badge      = fn ($name, $color) => $name ? '<span style="display:inline-block; padding:2px 8px; border-radius:8px; font-size:10px; font-weight:700; color:#fff; background:' . e($color ?: '#6b7280') . ';">' . e($name) . '</span>' : '';
     [$sLabel, $sFg, $sBg] = $draw->statusLabel();
     $editable   = $canManage && $draw->isEditable();
+    $canDraw    = $canManage && in_array($draw->status, ['ready', 'drawing'], true);
     $fmt        = fn ($n) => number_format((float) $n, 0, ',', ' ');
 @endphp
 
@@ -414,7 +483,7 @@ new class extends Component {
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
             @if($draw->isDrawn())
-                <a href="{{ route('draws.screen', $draw) }}" target="_blank" style="{{ $btnPrimary }}">Grand écran ↗</a>
+                <a href="{{ route('draws.screen', $draw) }}" target="_blank" style="{{ $btnPrimary }}">Tableau d'honneur ↗</a>
                 <a href="{{ route('draws.pv', $draw) }}" style="{{ $btnLight }}">PV (PDF)</a>
                 <a href="{{ route('draws.winners', $draw) }}" style="{{ $btnLight }}">Gagnants (CSV)</a>
             @endif
@@ -473,10 +542,12 @@ new class extends Component {
                         @error('form.min_txn_count') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
                     </div>
                     <div>
-                        <label style="{{ $labelStyle }}">Montant cumulé minimum (FDJ)</label>
-                        <input type="number" min="0" step="1" wire:model="form.min_amount" @disabled(!$editable) style="{{ $inputStyle }}">
+                        <label style="{{ $labelStyle }}">Montant minimum d'une transaction (FDJ)</label>
+                        <input type="number" min="0" step="1" wire:model="form.min_txn_amount" @disabled(!$editable) style="{{ $inputStyle }}">
+                        @error('form.min_txn_amount') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
                     </div>
                 </div>
+                <p style="font-size:10px; color:#9ca3af; margin:-8px 0 0;">Le client doit avoir au moins ce nombre de transactions, dont au moins une d'un montant supérieur ou égal au minimum (0 = pas de minimum).</p>
                 <div>
                     <label style="{{ $labelStyle }}">Types de transactions ({{ count($form['txn_indexes']) }} sélectionné(s))</label>
                     @if($editable)
@@ -509,13 +580,16 @@ new class extends Component {
                 <div>
                     <label style="{{ $labelStyle }}">Lots par client</label>
                     <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#374151;">
-                        <input type="checkbox" wire:model="form.one_prize_per_client" @disabled(!$editable)> Un seul lot par client (un gagnant ne peut plus sortir pour les lots suivants)
+                        <input type="checkbox" wire:model="form.one_prize_per_client" @disabled(!$editable)> Un seul lot par client (un gagnant ne peut plus sortir pour les lots tirés ensuite)
                     </label>
                 </div>
                 <div>
                     <label style="{{ $labelStyle }}">Exclusions</label>
                     <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#374151; padding:3px 0;">
                         <input type="checkbox" wire:model="form.exclude_employees" @disabled(!$editable)> Exclure les employés D-Money
+                    </label>
+                    <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#374151; padding:3px 0;">
+                        <input type="checkbox" wire:model="form.exclude_rds_lite" @disabled(!$editable)> Exclure les clients RDS_LITE
                     </label>
                     <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:#374151; padding:3px 0;">
                         Exclure les gagnants des
@@ -541,16 +615,19 @@ new class extends Component {
     <div style="{{ $card }}">
         <div style="{{ $cardHead }}">
             <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">{!! $step(2, $prizes->isNotEmpty()) !!}Lots à gagner
-                <span style="font-size:11px; font-weight:400; color:#9ca3af; margin-left:6px;">{{ $lotsTotal }} gagnant(s), {{ $subsTotal }} suppléant(s) — tirés dans l'ordre ci-dessous</span>
+                <span style="font-size:11px; font-weight:400; color:#9ca3af; margin-left:6px;">{{ $lotsTotal }} gagnant(s), {{ $subsTotal }} suppléant(s)</span>
             </p>
-            @if($canManage && !$draw->isDrawn())
-                <button wire:click="createPrize" style="{{ $btnPrimary }}">+ Ajouter un lot</button>
-            @endif
+            <div style="display:flex; gap:8px;">
+                <a href="{{ route('draws.prizes') }}" wire:navigate style="{{ $btnLight }}">Catalogue des lots</a>
+                @if($canManage && !$draw->isDrawn())
+                    <button wire:click="createPrize" style="{{ $btnPrimary }}">+ Ajouter un lot</button>
+                @endif
+            </div>
         </div>
         <table style="width:100%; border-collapse:collapse; font-size:12px;">
             <thead>
                 <tr style="background:#F7F8FC;">
-                    @foreach(['Ordre', 'Lot', 'Quantité', 'Suppléants', ''] as $th)
+                    @foreach(['', 'Lot', 'Catégorie', 'Quantité', 'Suppléants', ''] as $th)
                         <th style="padding:9px 16px; text-align:{{ in_array($th, ['Quantité', 'Suppléants']) ? 'right' : 'left' }}; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">{{ $th }}</th>
                     @endforeach
                 </tr>
@@ -558,25 +635,26 @@ new class extends Component {
             <tbody>
                 @forelse($prizes as $i => $prize)
                     <tr wire:key="prize-{{ $prize->id }}" style="border-bottom:1px solid #f3f4f6;">
-                        <td style="padding:9px 16px; color:#6b7280; white-space:nowrap;">
-                            {{ $i + 1 }}
-                            @if($canManage && !$draw->isDrawn())
-                                <button wire:click="movePrize({{ $prize->id }}, -1)" @disabled($i === 0) style="border:none; background:none; cursor:pointer; color:#1B2F6E;">▲</button>
-                                <button wire:click="movePrize({{ $prize->id }}, 1)" @disabled($i === $prizes->count() - 1) style="border:none; background:none; cursor:pointer; color:#1B2F6E;">▼</button>
+                        <td style="padding:6px 16px; width:70px;">
+                            @if($prize->imageUrl())
+                                <img src="{{ $prize->imageUrl() }}" alt="" style="width:52px; height:40px; object-fit:cover; border-radius:6px; display:block;">
                             @endif
                         </td>
                         <td style="padding:9px 16px; color:#111827; font-weight:600;">{{ $prize->name }}</td>
+                        <td style="padding:9px 16px;">{!! $badge($prize->category_name, $prize->category_color) !!}</td>
                         <td style="padding:9px 16px; text-align:right;">{{ $prize->quantity }}</td>
                         <td style="padding:9px 16px; text-align:right;">{{ $prize->substitutes }}</td>
                         <td style="padding:9px 16px; text-align:right; white-space:nowrap;">
                             @if($canManage && !$draw->isDrawn())
+                                <button wire:click="movePrize({{ $prize->id }}, -1)" @disabled($i === 0) style="border:none; background:none; cursor:pointer; color:#1B2F6E;">▲</button>
+                                <button wire:click="movePrize({{ $prize->id }}, 1)" @disabled($i === $prizes->count() - 1) style="border:none; background:none; cursor:pointer; color:#1B2F6E;">▼</button>
                                 <button wire:click="editPrize({{ $prize->id }})" style="{{ $btnLight }} font-size:11px; padding:5px 10px;">Modifier</button>
-                                <button wire:click="deletePrize({{ $prize->id }})" wire:confirm="Supprimer ce lot ?" style="{{ $btnDanger }}">Supprimer</button>
+                                <button wire:click="deletePrize({{ $prize->id }})" wire:confirm="Retirer ce lot du tirage ?" style="{{ $btnDanger }}">Retirer</button>
                             @endif
                         </td>
                     </tr>
                 @empty
-                    <tr><td colspan="5" style="padding:24px; text-align:center; color:#9ca3af;">Aucun lot pour l'instant.</td></tr>
+                    <tr><td colspan="6" style="padding:24px; text-align:center; color:#9ca3af;">Aucun lot pour l'instant : ajoutez-en depuis le catalogue.</td></tr>
                 @endforelse
             </tbody>
         </table>
@@ -585,7 +663,7 @@ new class extends Component {
     {{-- ÉTAPE 3 : ÉLIGIBLES --}}
     <div style="{{ $card }}">
         <div style="{{ $cardHead }}">
-            <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">{!! $step(3, in_array($draw->status, ['ready', 'drawn', 'closed'])) !!}Liste des clients éligibles</p>
+            <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">{!! $step(3, !in_array($draw->status, ['draft', 'computing'])) !!}Liste des clients éligibles</p>
             <div style="display:flex; gap:8px;">
                 @if($canManage && $draw->status === 'draft')
                     <button wire:click="computeEligibles" wire:loading.attr="disabled" style="{{ $btnPrimary }}">Calculer et figer la liste</button>
@@ -620,8 +698,8 @@ new class extends Component {
                     <table style="width:100%; border-collapse:collapse; font-size:12px;">
                         <thead>
                             <tr style="background:#F7F8FC;">
-                                @foreach(['Numéro', 'Nom', 'Transactions', 'Montant (FDJ)', 'Dernière transaction'] as $th)
-                                    <th style="padding:8px 12px; text-align:{{ in_array($th, ['Transactions', 'Montant (FDJ)']) ? 'right' : 'left' }}; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">{{ $th }}</th>
+                                @foreach(['Numéro', 'Nom', 'Transactions', 'Montant total (FDJ)', 'Plus grosse txn (FDJ)', 'Dernière transaction'] as $th)
+                                    <th style="padding:8px 12px; text-align:{{ str_contains($th, 'FDJ') || $th === 'Transactions' ? 'right' : 'left' }}; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb;">{{ $th }}</th>
                                 @endforeach
                             </tr>
                         </thead>
@@ -632,10 +710,11 @@ new class extends Component {
                                     <td style="padding:7px 12px; color:#111827;">{{ $p->name ?? '—' }}</td>
                                     <td style="padding:7px 12px; text-align:right;">{{ $fmt($p->txn_count) }}</td>
                                     <td style="padding:7px 12px; text-align:right;">{{ $fmt($p->amount) }}</td>
+                                    <td style="padding:7px 12px; text-align:right;">{{ $fmt($p->max_amount) }}</td>
                                     <td style="padding:7px 12px; color:#6b7280;">{{ $p->last_txn_at ? \Carbon\Carbon::parse($p->last_txn_at)->format('d/m/Y H:i') : '—' }}</td>
                                 </tr>
                             @empty
-                                <tr><td colspan="5" style="padding:20px; text-align:center; color:#9ca3af;">Aucun client.</td></tr>
+                                <tr><td colspan="6" style="padding:20px; text-align:center; color:#9ca3af;">Aucun client.</td></tr>
                             @endforelse
                         </tbody>
                     </table>
@@ -647,121 +726,197 @@ new class extends Component {
         </div>
     </div>
 
-    {{-- ÉTAPE 4 : TIRAGE --}}
+    {{-- ÉTAPE 4 : TIRAGE LOT PAR LOT --}}
     <div style="{{ $card }}">
         <div style="{{ $cardHead }}">
-            <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">{!! $step(4, $draw->isDrawn()) !!}Tirage au sort</p>
+            <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">{!! $step(4, in_array($draw->status, ['drawn', 'closed'])) !!}Tirage au sort, lot par lot</p>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 @if($draw->isDrawn())
                     <button wire:click="verify" style="{{ $btnLight }}">Vérifier l'intégrité</button>
                 @endif
-                @if($canManage && $draw->status === 'drawn')
-                    <button wire:click="closeDraw" wire:confirm="Clôturer le tirage ? Plus aucun gagnant ne pourra être écarté ou remplacé." style="{{ $btnPrimary }}">Clôturer</button>
+                @if($canManage && in_array($draw->status, ['drawing', 'drawn']))
+                    <button wire:click="closeDraw" wire:confirm="Clôturer le tirage ? Plus aucun lot ne pourra être tiré et aucun gagnant écarté ou remplacé." style="{{ $btnPrimary }}">Clôturer</button>
                 @endif
             </div>
         </div>
         <div style="padding:18px;">
-            @if($draw->status === 'ready')
-                @php $needed = $draw->one_prize_per_client ? $lotsTotal + $subsTotal : $prizes->max(fn ($p) => $p->quantity + $p->substitutes); @endphp
-                <p style="font-size:12px; color:#374151; margin:0 0 12px;">
-                    {{ $fmt($draw->eligible_count) }} client(s) éligible(s) pour {{ $lotsTotal }} gagnant(s) et {{ $subsTotal }} suppléant(s).
-                    {{ $draw->one_prize_per_client ? 'Un seul lot par client.' : 'Un client peut gagner plusieurs lots.' }}
-                </p>
-                @if($prizes->isEmpty())
-                    <p style="font-size:12px; color:#B42318; margin:0;">Ajoutez au moins un lot avant de lancer le tirage.</p>
-                @else
-                    @if($needed > $draw->eligible_count)
-                        <p style="font-size:12px; color:#92400E; margin:0 0 12px;">⚠ Moins d'éligibles que de sorties prévues ({{ $needed }}) : certains lots resteront sans gagnant.</p>
-                    @endif
-                    @if($canManage)
-                        <button wire:click="runDraw" wire:loading.attr="disabled"
-                                wire:confirm="Lancer le tirage ? Le résultat est définitif : les lots et la liste ne pourront plus être modifiés."
-                                style="{{ $btnPrimary }} background:#00843D; font-size:14px; padding:11px 26px;">
-                            🎲 Lancer le tirage
-                        </button>
-                        <span wire:loading wire:target="runDraw" style="font-size:12px; color:#9ca3af; margin-left:10px;">Tirage en cours…</span>
-                    @endif
-                @endif
-            @elseif(!$draw->isDrawn())
+            @if(in_array($draw->status, ['draft', 'computing']))
                 <p style="font-size:12px; color:#6b7280; margin:0;">Disponible une fois la liste des éligibles figée.</p>
+            @elseif($prizes->isEmpty())
+                <p style="font-size:12px; color:#B42318; margin:0;">Ajoutez au moins un lot avant de lancer le tirage.</p>
             @else
                 <p style="font-size:11px; color:#6b7280; margin:0 0 6px; line-height:1.7;">
-                    Tiré le {{ $draw->drawn_at?->format('d/m/Y H:i:s') }} par {{ $draw->drawer?->name ?? '—' }}
-                    · {{ $effective }} gagnant(s) retenu(s) sur {{ $lotsTotal }} lot(s)
+                    {{ $fmt($draw->eligible_count) }} client(s) éligible(s) · {{ $effective }} gagnant(s) retenu(s) sur {{ $lotsTotal }}
+                    · {{ $draw->one_prize_per_client ? 'un seul lot par client' : 'plusieurs lots possibles par client' }}
+                    @if($draw->drawn_at) · tous les lots tirés le {{ $draw->drawn_at->format('d/m/Y H:i') }} @endif
                     @if($draw->closed_at) · clôturé le {{ $draw->closed_at->format('d/m/Y H:i') }} par {{ $draw->closer?->name ?? '—' }} @endif
-                    <br>Graine : <span style="font-family:monospace; color:#111827;">{{ $draw->seed }}</span>
                 </p>
+                @if($draw->status === 'ready')
+                    <p style="font-size:12px; color:#374151; margin:0 0 6px;">Choisissez un lot et cliquez sur « Tirer au sort » : un gagnant est tiré à chaque clic. Les suppléants du lot sont tirés automatiquement après son dernier gagnant.</p>
+                @endif
 
                 @if($verifyResult)
                     @php $ok = $verifyResult['list_ok'] && $verifyResult['result_ok']; @endphp
                     <div style="margin:10px 0; padding:10px 14px; border-radius:8px; font-size:12px; {{ $ok ? 'background:#E5F5ED; color:#005C2B;' : 'background:#FDECEC; color:#B42318;' }}">
                         Contrôle du {{ $verifyResult['at'] }} :
                         liste des éligibles {{ $verifyResult['list_ok'] ? 'intacte ✓' : 'MODIFIÉE ✗' }} ·
-                        tirage rejoué avec la graine {{ $verifyResult['result_ok'] ? 'identique ✓' : 'DIFFÉRENT ✗' }}
+                        tirages rejoués avec leurs graines {{ $verifyResult['result_ok'] ? 'identiques ✓' : 'DIFFÉRENTS ✗' }}
                     </div>
                 @endif
 
                 @foreach($prizes as $prize)
-                    @php $kept = $prize->winners->filter->isEffective()->count(); @endphp
-                    <div wire:key="result-{{ $prize->id }}" style="border:1px solid #e5e7eb; border-radius:8px; margin-top:12px; overflow:hidden;">
-                        <div style="background:#F7F8FC; padding:9px 14px; display:flex; justify-content:space-between; font-size:12px;">
-                            <span style="font-weight:700; color:#111827;">🎁 {{ $prize->name }}</span>
-                            <span style="color:{{ $kept < $prize->quantity ? '#B42318' : '#005C2B' }}; font-weight:600;">{{ $kept }} / {{ $prize->quantity }} gagnant(s)</span>
+                    @php
+                        $drawnCount = $prize->winners->where('kind', 'winner')->count();
+                        $kept       = $prize->winners->filter->isEffective()->count();
+                    @endphp
+                    <div wire:key="result-{{ $prize->id }}" style="border:1px solid #e5e7eb; border-left:4px solid {{ $prize->category_color ?? '#1B2F6E' }}; border-radius:8px; margin-top:12px; overflow:hidden;">
+                        <div style="padding:10px 14px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; background:#FAFBFD;">
+                            @if($prize->imageUrl())
+                                <img src="{{ $prize->imageUrl() }}" alt="" style="width:64px; height:48px; object-fit:cover; border-radius:6px;">
+                            @endif
+                            <div style="flex:1; min-width:160px;">
+                                <p style="font-size:13px; font-weight:700; color:#111827; margin:0;">{{ $prize->name }}</p>
+                                <p style="margin:3px 0 0;">{!! $badge($prize->category_name, $prize->category_color) !!}
+                                    <span style="font-size:11px; color:#6b7280; margin-left:6px;">{{ $drawnCount }} / {{ $prize->quantity }} tiré(s) · {{ $kept }} retenu(s)</span>
+                                </p>
+                            </div>
+                            @if($canDraw)
+                                @if($drawnCount < $prize->quantity)
+                                    <button wire:click="drawPrize({{ $prize->id }})" wire:loading.attr="disabled" wire:target="drawPrize"
+                                            style="background:#00843D; color:#fff; font-size:13px; font-weight:700; padding:9px 20px; border-radius:8px; border:none; cursor:pointer;">
+                                        🎲 Tirer au sort{{ $prize->quantity > 1 ? ' (' . ($drawnCount + 1) . '/' . $prize->quantity . ')' : '' }}
+                                    </button>
+                                @else
+                                    <span style="font-size:12px; font-weight:700; color:#005C2B;">✓ Lot tiré</span>
+                                @endif
+                            @endif
                         </div>
-                        <table style="width:100%; border-collapse:collapse; font-size:12px;">
-                            @foreach($prize->winners as $w)
-                                @php
-                                    $isEff     = $w->isEffective();
-                                    $needsExtra = $w->status === 'invalidated' && ($w->kind !== 'substitute' || $w->promoted_at) && !isset($replacedIds[$w->id])
-                                                  && !$prize->winners->contains(fn ($o) => $o->isWaitingSubstitute());
-                                @endphp
-                                <tr wire:key="winner-{{ $w->id }}" style="border-top:1px solid #f3f4f6; {{ $w->status === 'invalidated' ? 'opacity:.6;' : '' }}">
-                                    <td style="padding:8px 14px; white-space:nowrap; width:150px;">
-                                        <span style="font-size:10px; font-weight:700; padding:2px 8px; border-radius:8px; {{ $isEff ? 'background:#E5F5ED; color:#005C2B;' : 'background:#F3F4F6; color:#6b7280;' }}">
-                                            {{ $w->promoted_at ? 'Suppléant promu' : \App\Models\DrawWinner::KINDS[$w->kind] }} {{ $w->kind !== 'extra' ? '#' . $w->rank : '' }}
-                                        </span>
-                                    </td>
-                                    <td style="padding:8px 14px; font-family:monospace; color:#111827; white-space:nowrap;">{{ \App\Support\DrawEngine::display($w->msisdn) }}</td>
-                                    <td style="padding:8px 14px; color:#111827; font-weight:{{ $isEff ? '600' : '400' }};">{{ $w->name ?? '—' }}</td>
-                                    <td style="padding:8px 14px; color:#6b7280; font-size:11px;">
-                                        @if($w->status === 'invalidated')
-                                            <span style="color:#B42318; font-weight:600;">Écarté</span> : {{ $w->invalidated_reason }}
-                                            ({{ $w->invalidator?->name ?? '—' }}, {{ $w->invalidated_at?->format('d/m/Y H:i') }})
-                                        @elseif($w->replaces)
-                                            Remplace {{ \App\Support\DrawEngine::display($w->replaces->msisdn) }}
-                                        @endif
-                                    </td>
-                                    <td style="padding:8px 14px; text-align:right; white-space:nowrap;">
-                                        @if($canManage && $draw->status === 'drawn')
-                                            @if($w->status === 'valid')
-                                                <button wire:click="askInvalidate({{ $w->id }})" style="{{ $btnDanger }}">Écarter</button>
-                                            @elseif($needsExtra)
-                                                <button wire:click="drawExtra({{ $w->id }})" wire:confirm="Tirer un remplaçant parmi les éligibles restants ?" style="{{ $btnLight }} font-size:11px; padding:5px 10px;">Tirage complémentaire</button>
+                        @if($prize->winners->isNotEmpty())
+                            <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                                @foreach($prize->winners as $w)
+                                    @php
+                                        $isEff      = $w->isEffective();
+                                        $needsExtra = $w->status === 'invalidated' && ($w->kind !== 'substitute' || $w->promoted_at) && !isset($replacedIds[$w->id])
+                                                      && !$prize->winners->contains(fn ($o) => $o->isWaitingSubstitute());
+                                    @endphp
+                                    <tr wire:key="winner-{{ $w->id }}" style="border-top:1px solid #f3f4f6; {{ $w->status === 'invalidated' ? 'opacity:.6;' : '' }}">
+                                        <td style="padding:8px 14px; white-space:nowrap; width:150px;">
+                                            <span style="font-size:10px; font-weight:700; padding:2px 8px; border-radius:8px; {{ $isEff ? 'background:#E5F5ED; color:#005C2B;' : 'background:#F3F4F6; color:#6b7280;' }}">
+                                                {{ $w->promoted_at ? 'Suppléant promu' : \App\Models\DrawWinner::KINDS[$w->kind] }} {{ $w->kind !== 'extra' ? '#' . $w->rank : '' }}
+                                            </span>
+                                        </td>
+                                        <td style="padding:8px 14px; font-family:monospace; color:#111827; white-space:nowrap;">{{ \App\Support\DrawEngine::display($w->msisdn) }}</td>
+                                        <td style="padding:8px 14px; color:#111827; font-weight:{{ $isEff ? '600' : '400' }};">{{ $w->name ?? '—' }}</td>
+                                        <td style="padding:8px 14px; color:#6b7280; font-size:11px;">
+                                            @if($w->status === 'invalidated')
+                                                <span style="color:#B42318; font-weight:600;">Écarté</span> : {{ $w->invalidated_reason }}
+                                                ({{ $w->invalidator?->name ?? '—' }}, {{ $w->invalidated_at?->format('d/m/Y H:i') }})
+                                            @elseif($w->replaces)
+                                                Remplace {{ \App\Support\DrawEngine::display($w->replaces->msisdn) }}
                                             @endif
-                                        @endif
-                                    </td>
-                                </tr>
-                            @endforeach
-                        </table>
+                                        </td>
+                                        <td style="padding:8px 14px; text-align:right; white-space:nowrap;">
+                                            @if($w->kind !== 'substitute' || $w->promoted_at)
+                                                <button wire:click="$set('revealId', {{ $w->id }})" title="Réafficher l'annonce" style="border:none; background:none; cursor:pointer; font-size:13px;">🔍</button>
+                                            @endif
+                                            @if($canManage && in_array($draw->status, ['drawing', 'drawn']))
+                                                @if($w->status === 'valid')
+                                                    <button wire:click="askInvalidate({{ $w->id }})" style="{{ $btnDanger }}">Écarter</button>
+                                                @elseif($needsExtra)
+                                                    <button wire:click="drawExtra({{ $w->id }})" wire:confirm="Tirer un remplaçant parmi les éligibles restants ?" style="{{ $btnLight }} font-size:11px; padding:5px 10px;">Tirage complémentaire</button>
+                                                @endif
+                                            @endif
+                                        </td>
+                                    </tr>
+                                @endforeach
+                            </table>
+                        @endif
                     </div>
                 @endforeach
             @endif
         </div>
     </div>
 
-    {{-- MODAL LOT --}}
+    {{-- FENÊTRE DE RÉSULTAT : un gagnant, fermée par l'utilisateur --}}
+    @if($reveal && $revealPrize)
+        <div wire:key="reveal-{{ $reveal->id }}"
+             x-data="{ rolling: true, full: false, roll: '' }"
+             x-init="const t = setInterval(() => roll = '2537****' + String(Math.floor(Math.random() * 1000)).padStart(3, '0'), 70);
+                     setTimeout(() => { clearInterval(t); rolling = false; }, 2600)"
+             x-on:keydown.escape.window="if (!rolling) $wire.closeReveal()">
+            <div style="position:fixed; inset:0; background:rgba(10,20,50,0.82); z-index:998;"></div>
+            <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:min(620px,95vw); max-height:94vh; overflow-y:auto; background:#fff; border-radius:18px; z-index:999; box-shadow:0 30px 80px rgba(0,0,0,0.4); text-align:center;">
+                <div style="background:{{ $revealPrize->category_color ?? '#1B2F6E' }}; color:#fff; padding:12px 20px; font-size:13px; font-weight:800; letter-spacing:2px; text-transform:uppercase;">
+                    {{ $revealPrize->category_name ?? 'Lot' }}
+                </div>
+                <div style="padding:22px 28px 26px;">
+                    @if($revealPrize->imageUrl())
+                        <img src="{{ $revealPrize->imageUrl() }}" alt="" style="max-width:100%; max-height:260px; object-fit:contain; display:block; margin:0 auto 14px;">
+                    @endif
+                    <p style="font-size:22px; font-weight:800; color:#111827; margin:0;">🎁 {{ $revealPrize->name }}</p>
+                    @if($reveal->kind === 'extra' || $reveal->promoted_at)
+                        <p style="font-size:11px; color:#92400E; margin:4px 0 0;">Remplacement d'un gagnant écarté</p>
+                    @endif
+
+                    <div style="margin:22px 0 6px; padding:18px; border-radius:12px; background:#F7F8FC;">
+                        <p style="font-size:12px; color:#6b7280; margin:0 0 6px; text-transform:uppercase; letter-spacing:1.5px;">Gagnant</p>
+                        <p x-show="rolling" style="font-size:40px; font-weight:800; font-family:monospace; color:#1B2F6E; margin:0; letter-spacing:3px;" x-text="roll"></p>
+                        <div x-show="!rolling" x-cloak x-transition.opacity.duration.500ms>
+                            <p style="font-size:30px; font-weight:800; color:#00843D; margin:0;">{{ $reveal->name ?? '—' }}</p>
+                            <p style="font-size:26px; font-weight:700; font-family:monospace; color:#111827; margin:8px 0 0; letter-spacing:2px;"
+                               x-text="full ? @js(\App\Support\DrawEngine::display($reveal->msisdn)) : @js(\App\Support\DrawEngine::mask($reveal->msisdn))"></p>
+                        </div>
+                    </div>
+
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:18px; gap:10px;">
+                        <label style="font-size:11px; color:#9ca3af; display:flex; align-items:center; gap:6px;">
+                            <input type="checkbox" x-model="full"> Afficher le numéro complet
+                        </label>
+                        <button wire:click="closeReveal" :disabled="rolling"
+                                style="background:#1B2F6E; color:#fff; font-size:14px; font-weight:700; padding:10px 28px; border-radius:10px; border:none; cursor:pointer;"
+                                :style="rolling ? 'opacity:.4; cursor:wait;' : ''">Fermer</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    @endif
+
+    {{-- MODAL LOT (choix dans le catalogue) --}}
     @if($showPrizeForm)
         <div wire:click="$set('showPrizeForm', false)" style="position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:998;"></div>
-        <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:min(440px,95vw); background:#fff; border-radius:14px; z-index:999; box-shadow:0 20px 60px rgba(0,0,0,0.2);">
+        <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:min(480px,95vw); background:#fff; border-radius:14px; z-index:999; box-shadow:0 20px 60px rgba(0,0,0,0.2);">
             <div style="padding:16px 20px; border-bottom:1px solid #e5e7eb;">
-                <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">{{ $editingPrizeId ? 'Modifier le lot' : 'Nouveau lot' }}</p>
+                <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">{{ $editingPrizeId ? 'Modifier le lot' : 'Ajouter un lot' }}</p>
             </div>
             <div style="padding:20px; display:flex; flex-direction:column; gap:14px;">
                 <div>
-                    <label style="{{ $labelStyle }}">Libellé <span style="color:#E24B4A;">*</span></label>
-                    <input type="text" wire:model="prizeForm.name" placeholder="Ex. Smartphone, recharge 1 000 FDJ…" style="{{ $inputStyle }}">
-                    @error('prizeForm.name') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
+                    <label style="{{ $labelStyle }}">Lot du catalogue <span style="color:#E24B4A;">*</span></label>
+                    <select wire:model.live="prizeForm.prize_id" style="{{ $inputStyle }}">
+                        <option value="">— Choisir —</option>
+                        @foreach($catalog as $categoryName => $items)
+                            <optgroup label="{{ $categoryName }}">
+                                @foreach($items as $item)
+                                    <option value="{{ $item->id }}">{{ $item->name }}{{ $item->is_active ? '' : ' (archivé)' }}</option>
+                                @endforeach
+                            </optgroup>
+                        @endforeach
+                    </select>
+                    @error('prizeForm.prize_id') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
+                    @if($catalog->isEmpty())
+                        <p style="font-size:11px; color:#92400E; margin:4px 0 0;">Le catalogue est vide : <a href="{{ route('draws.prizes') }}" wire:navigate>ajoutez d'abord des lots</a>.</p>
+                    @endif
                 </div>
+                @if($selectedCatalog)
+                    <div style="display:flex; gap:12px; align-items:center; background:#F7F8FC; border-radius:8px; padding:10px;">
+                        @if($selectedCatalog->mainImage)
+                            <img src="{{ $selectedCatalog->mainImage->url() }}" alt="" style="width:80px; height:60px; object-fit:cover; border-radius:6px;">
+                        @endif
+                        <div>
+                            <p style="font-size:13px; font-weight:700; color:#111827; margin:0;">{{ $selectedCatalog->name }}</p>
+                            <p style="margin:4px 0 0;">{!! $badge($selectedCatalog->category->name, $selectedCatalog->category->color) !!}</p>
+                        </div>
+                    </div>
+                @endif
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                     <div>
                         <label style="{{ $labelStyle }}">Quantité (gagnants)</label>
@@ -774,7 +929,7 @@ new class extends Component {
                         @error('prizeForm.substitutes') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
                     </div>
                 </div>
-                <p style="font-size:11px; color:#9ca3af; margin:0;">Les suppléants remplacent, dans leur ordre de sortie, un gagnant écarté de ce lot.</p>
+                <p style="font-size:11px; color:#9ca3af; margin:0;">Les suppléants sont tirés après le dernier gagnant du lot ; ils remplacent, dans leur ordre de sortie, un gagnant écarté.</p>
             </div>
             <div style="padding:12px 20px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-end; gap:10px;">
                 <button wire:click="$set('showPrizeForm', false)" style="background:#f3f4f6; color:#374151; font-size:13px; font-weight:500; padding:8px 20px; border-radius:8px; border:1px solid #e5e7eb; cursor:pointer;">Annuler</button>

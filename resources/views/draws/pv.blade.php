@@ -37,12 +37,13 @@
         @if($draw->description)<tr><td>Description</td><td>{{ $draw->description }}</td></tr>@endif
         <tr><td>Période des transactions</td><td>du {{ $draw->period_start->format('d/m/Y') }} au {{ $draw->period_end->format('d/m/Y') }} inclus</td></tr>
         <tr><td>Types de transactions</td><td>{{ $typeNames->implode(', ') }}</td></tr>
-        <tr><td>Conditions</td><td>transactions terminées payées par un client ; au moins {{ $draw->min_txn_count }} transaction(s){{ $draw->min_amount > 0 ? ' et ' . $fmt($draw->min_amount) . ' FDJ cumulés' : '' }}</td></tr>
+        <tr><td>Conditions</td><td>transactions terminées payées par un client ; au moins {{ $draw->min_txn_count }} transaction(s){{ $draw->min_txn_amount > 0 ? ', dont au moins une de ' . $fmt($draw->min_txn_amount) . ' FDJ ou plus' : '' }}</td></tr>
         <tr><td>Chances de gagner</td><td>{{ \App\Models\Draw::CHANCE_MODES[$draw->chance_mode] }}</td></tr>
         <tr><td>Lots par client</td><td>{{ $draw->one_prize_per_client ? 'Un seul lot par client' : 'Plusieurs lots possibles par client' }}</td></tr>
         <tr><td>Exclusions</td><td>
             {{ collect([
                 $draw->exclude_employees ? 'employés D-Money' : null,
+                $draw->exclude_rds_lite ? 'clients RDS_LITE' : null,
                 $draw->exclude_winners_days ? "gagnants des {$draw->exclude_winners_days} derniers jours" : null,
                 $draw->blacklistMsisdns() ? count($draw->blacklistMsisdns()) . ' numéro(s) en liste noire' : null,
             ])->filter()->implode(' ; ') ?: 'aucune' }}
@@ -64,8 +65,10 @@
 
     <h2>Tirage</h2>
     <table class="info">
-        <tr><td>Effectué par</td><td>{{ $draw->drawer?->name ?? '—' }}, le {{ $draw->drawn_at?->format('d/m/Y à H:i:s') }}</td></tr>
-        <tr><td>Graine aléatoire</td><td class="mono">{{ $draw->seed }}</td></tr>
+        <tr><td>Mode</td><td>lot par lot, un gagnant par tirage ; suppléants tirés après le dernier gagnant de chaque lot</td></tr>
+        @if($draw->drawn_at)
+            <tr><td>Tous les lots tirés</td><td>le {{ $draw->drawn_at->format('d/m/Y à H:i:s') }} ({{ $draw->drawer?->name ?? '—' }})</td></tr>
+        @endif
         <tr><td>Contrôle d'intégrité</td><td>
             liste <span class="{{ $verify['list_ok'] ? 'ok' : 'ko' }}">{{ $verify['list_ok'] ? 'intacte' : 'modifiée' }}</span>,
             tirage rejoué <span class="{{ $verify['result_ok'] ? 'ok' : 'ko' }}">{{ $verify['result_ok'] ? 'identique' : 'différent' }}</span>
@@ -75,16 +78,28 @@
         @endif
     </table>
     <p class="muted" style="margin-top:6px;">
-        Le tirage est rejouable : à partir de la liste figée (triée par numéro), des lots dans l'ordre ci-dessous et de la graine,
-        le générateur Xoshiro256** redonne exactement les mêmes gagnants et suppléants.
+        Chaque tirage est rejouable : à partir de la liste figée (triée par numéro), des clients déjà sortis à cet instant et de la
+        graine propre à ce tirage (indiquée ci-dessous), le générateur Xoshiro256** redonne exactement le même client.
     </p>
 
     <h2>Résultats</h2>
     @foreach($prizes as $i => $prize)
-        <p style="margin:10px 0 4px;"><strong>{{ $i + 1 }}. {{ $prize->name }}</strong>
-            <span class="muted">— {{ $prize->quantity }} gagnant(s), {{ $prize->substitutes }} suppléant(s)</span></p>
+        <table style="margin:12px 0 4px;">
+            <tr>
+                @if($images[$prize->id] ?? null)
+                    <td style="width:70px; padding:0;"><img src="{{ $images[$prize->id] }}" style="width:62px; height:46px;"></td>
+                @endif
+                <td style="padding:0 0 0 6px; vertical-align:middle;">
+                    <strong>{{ $i + 1 }}. {{ $prize->name }}</strong>
+                    @if($prize->category_name)
+                        <span style="color:#fff; background:{{ $prize->category_color ?? '#6b7280' }}; padding:1px 6px; border-radius:4px; font-size:8px; font-weight:bold;">{{ $prize->category_name }}</span>
+                    @endif
+                    <br><span class="muted">{{ $prize->quantity }} gagnant(s), {{ $prize->substitutes }} suppléant(s)</span>
+                </td>
+            </tr>
+        </table>
         <table class="grid">
-            <tr><th>Type</th><th>Numéro</th><th>Nom</th><th class="right">Txn</th><th>Retenu</th><th>Observation</th></tr>
+            <tr><th>Type</th><th>Numéro</th><th>Nom</th><th class="right">Txn</th><th>Retenu</th><th>Tiré le</th><th>Observation</th></tr>
             @foreach($prize->winners as $w)
                 <tr class="{{ $w->status === 'invalidated' ? 'strike' : '' }}">
                     <td>{{ $w->promoted_at ? 'Suppléant promu' : \App\Models\DrawWinner::KINDS[$w->kind] }}{{ $w->kind !== 'extra' ? ' #' . $w->rank : '' }}</td>
@@ -92,6 +107,7 @@
                     <td>{{ $w->name ?? '—' }}</td>
                     <td class="right">{{ $w->txn_count }}</td>
                     <td>{!! $w->isEffective() ? '<span class="ok">Oui</span>' : 'Non' !!}</td>
+                    <td style="white-space:nowrap;">{{ $w->created_at?->format('d/m H:i:s') }}<br><span class="mono" style="font-size:6px; color:#9ca3af;">{!! implode('<br>', str_split((string) $w->seed, 32)) !!}</span></td>
                     <td>
                         @if($w->status === 'invalidated')
                             Écarté : {{ $w->invalidated_reason }} ({{ $w->invalidator?->name ?? '—' }}, {{ $w->invalidated_at?->format('d/m/Y H:i') }})

@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Models\Draw;
+use App\Models\DrawPrize;
 use App\Models\DrawWinner;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -14,18 +15,24 @@ use RuntimeException;
 /**
  * Tirages au sort Marketing.
  *
- * 1. computeEligibles() : clients (payeurs, type Customer) ayant au moins une
- *    transaction terminée des types choisis sur la période, un client = une
+ * 1. computeEligibles() : clients (payeurs, type Customer) ayant des
+ *    transactions terminées des types choisis sur la période, un client = une
  *    ligne (doublons supprimés), puis seuils et exclusions. La liste est figée
  *    dans draw_participants avec son empreinte SHA-256.
- * 2. run() : tirage des lots dans leur ordre, gagnants puis suppléants, avec
- *    une graine aléatoire conservée → verify() rejoue le tirage à l'identique.
+ * 2. drawOne() : tirage lot par lot, un gagnant par appel ; au dernier gagnant
+ *    d'un lot, ses suppléants sont tirés dans la foulée.
  * 3. invalidate() / drawExtra() : gagnant écarté → premier suppléant promu, ou
  *    tirage complémentaire s'il n'en reste plus.
+ *
+ * Chaque sortie garde sa graine : verify() rejoue toutes les sorties dans leur
+ * ordre (mêmes exclusions à l'instant du tirage) et doit retrouver les mêmes.
  */
 class DrawEngine
 {
     private const AMOUNT_FACTOR = 100;   // fact_txn_v2 stocke les montants divisés par 100
+
+    /** Liste figée par tirage, chargée une fois par requête */
+    private array $participantsCache = [];
 
     /** 25377046542 → 2537****542 (affichage public) */
     public static function mask(string $msisdn): string
@@ -62,9 +69,10 @@ class DrawEngine
 
             // Un client = une ligne : le GROUP BY supprime les doublons
             DB::insert("
-                INSERT INTO draw_participants (draw_id, msisdn, name, txn_count, amount, last_txn_at)
+                INSERT INTO draw_participants (draw_id, msisdn, name, txn_count, amount, max_amount, last_txn_at)
                 SELECT ?, debit_party_identifier, MAX(debit_party_name), COUNT(*),
-                       COALESCE(SUM(actual_amount), 0) * {$f}, MAX(transaction_initiated_time)
+                       COALESCE(SUM(actual_amount), 0) * {$f}, COALESCE(MAX(actual_amount), 0) * {$f},
+                       MAX(transaction_initiated_time)
                   FROM fact_txn_v2
                  WHERE transaction_initiated_time >= ? AND transaction_initiated_time < ?
                    AND status = 'Completed'
@@ -81,17 +89,23 @@ class DrawEngine
                 ['label' => 'Clients uniques (doublons supprimés)', 'value' => $participants()->count()],
             ];
 
+            // Au moins N transactions, dont au moins une ≥ montant minimum
             $removed = $participants()
                 ->where(fn ($q) => $q->where('txn_count', '<', max(1, (int) $draw->min_txn_count))
-                    ->orWhere('amount', '<', (float) $draw->min_amount))
+                    ->orWhere('max_amount', '<', (float) $draw->min_txn_amount))
                 ->delete();
-            if ($draw->min_txn_count > 1 || $draw->min_amount > 0) {
+            if ($draw->min_txn_count > 1 || $draw->min_txn_amount > 0) {
                 $funnel[] = ['label' => 'Sous le seuil (nombre ou montant)', 'value' => -$removed];
             }
 
             if ($draw->exclude_employees && Schema::hasTable('employees')) {
                 $removed  = $participants()->whereIn('msisdn', DB::table('employees')->select('msisdn'))->delete();
                 $funnel[] = ['label' => 'Employés D-Money exclus', 'value' => -$removed];
+            }
+
+            if ($draw->exclude_rds_lite) {
+                $removed  = $participants()->whereIn('msisdn', DB::table('kyc.customer_master')->where('segment', 'RDS_LITE')->select('msisdn'))->delete();
+                $funnel[] = ['label' => 'Clients RDS_LITE exclus', 'value' => -$removed];
             }
 
             if ($blacklist = $draw->blacklistMsisdns()) {
@@ -103,9 +117,8 @@ class DrawEngine
                 // Horloge de l'application : celle du serveur de base est décalée
                 $since    = Carbon::now()->subDays($draw->exclude_winners_days);
                 $winners  = DB::table('draw_winners as w')
-                    ->join('draws as d', 'd.id', '=', 'w.draw_id')
                     ->where('w.draw_id', '<>', $draw->id)
-                    ->where('d.drawn_at', '>=', $since)
+                    ->where('w.created_at', '>=', $since)
                     ->where('w.status', 'valid')
                     ->where(fn ($q) => $q->whereIn('w.kind', ['winner', 'extra'])->orWhereNotNull('w.promoted_at'))
                     ->select('w.msisdn');
@@ -139,13 +152,15 @@ class DrawEngine
                 'computed_at'    => Carbon::now(),
             ]);
         });
+
+        unset($this->participantsCache[$draw->id]);
     }
 
     /** Retour au brouillon : la liste figée est supprimée */
     public function resetToDraft(Draw $draw): void
     {
         if ($draw->isDrawn()) {
-            throw new RuntimeException('Ce tirage a déjà eu lieu.');
+            throw new RuntimeException('Le tirage a commencé : la liste ne peut plus être modifiée.');
         }
 
         DB::transaction(function () use ($draw) {
@@ -155,6 +170,8 @@ class DrawEngine
                 'ticket_count' => null, 'eligible_hash' => null, 'computed_by' => null, 'computed_at' => null,
             ]);
         });
+
+        unset($this->participantsCache[$draw->id]);
     }
 
     /** Empreinte de la liste figée : « msisdn;chances » par ligne, triée par numéro */
@@ -162,110 +179,89 @@ class DrawEngine
     {
         $ctx = hash_init('sha256');
 
-        foreach ($this->participants($draw) as $p) {
+        foreach ($this->loadParticipants($draw, fresh: true) as $p) {
             hash_update($ctx, $p->msisdn . ';' . $this->weight($draw, $p) . "\n");
         }
 
         return hash_final($ctx);
     }
 
-    // ── 2. Tirage ─────────────────────────────────────────────────────────
+    // ── 2. Tirage lot par lot ─────────────────────────────────────────────
 
-    public function run(Draw $draw, ?int $userId = null): void
+    /**
+     * Tire UN gagnant pour ce lot. Au dernier gagnant du lot, ses suppléants
+     * sont tirés aussitôt (ils ne sont pas annoncés).
+     */
+    public function drawOne(DrawPrize $prize, ?int $userId = null): DrawWinner
     {
-        $draw->refresh();
+        return DB::transaction(function () use ($prize, $userId) {
+            // Verrou : deux clics simultanés ne peuvent pas tirer deux fois la même place
+            $draw = Draw::whereKey($prize->draw_id)->lockForUpdate()->firstOrFail();
 
-        if ($draw->status !== 'ready') {
-            throw new RuntimeException('Le tirage n\'est possible qu\'une fois la liste des éligibles figée.');
-        }
-        if ($draw->prizes()->count() === 0) {
-            throw new RuntimeException('Ajoutez au moins un lot avant de lancer le tirage.');
-        }
-        if (!hash_equals((string) $draw->eligible_hash, $this->hash($draw))) {
-            throw new RuntimeException('La liste des éligibles a changé depuis son calcul : recalculez-la.');
-        }
-
-        // Graine générée au moment du tirage, après le gel de la liste : imprévisible
-        $seed  = bin2hex(random_bytes(32));
-        $picks = $this->simulate($draw, $seed);
-        $now   = Carbon::now();
-
-        DB::transaction(function () use ($draw, $userId, $seed, $picks, $now) {
-            foreach (array_chunk($picks, 500) as $chunk) {
-                DrawWinner::insert(array_map(fn ($p) => [
-                    'draw_id'       => $draw->id,
-                    'draw_prize_id' => $p['prize_id'],
-                    'msisdn'        => $p['participant']->msisdn,
-                    'name'          => $p['participant']->name,
-                    'txn_count'     => $p['participant']->txn_count,
-                    'kind'          => $p['kind'],
-                    'rank'          => $p['rank'],
-                    'status'        => 'valid',
-                    'created_at'    => $now,
-                    'updated_at'    => $now,
-                ], $chunk));
+            if (!in_array($draw->status, ['ready', 'drawing'], true)) {
+                throw new RuntimeException($draw->status === 'drawn'
+                    ? 'Tous les lots ont déjà été tirés.'
+                    : 'Le tirage n\'est possible qu\'une fois la liste des éligibles figée et avant la clôture.');
+            }
+            if ($draw->status === 'ready' && !hash_equals((string) $draw->eligible_hash, $this->hash($draw))) {
+                throw new RuntimeException('La liste des éligibles a changé depuis son calcul : recalculez-la.');
             }
 
-            $draw->update(['status' => 'drawn', 'seed' => $seed, 'drawn_by' => $userId, 'drawn_at' => $now]);
+            $drawn = $prize->winners()->where('kind', 'winner')->count();
+            if ($drawn >= $prize->quantity) {
+                throw new RuntimeException('Tous les gagnants de ce lot ont déjà été tirés.');
+            }
+
+            $winner = $this->pick($draw, $prize, 'winner', $drawn + 1)
+                ?? throw new RuntimeException('Plus aucun client éligible disponible pour ce lot.');
+
+            if ($drawn + 1 === $prize->quantity) {
+                for ($rank = 1; $rank <= $prize->substitutes; $rank++) {
+                    if (!$this->pick($draw, $prize, 'substitute', $rank)) {
+                        break;
+                    }
+                }
+            }
+
+            $complete = $draw->prizes()->get()->every(fn (DrawPrize $p) => $p->isComplete());
+            $draw->update($complete
+                ? ['status' => 'drawn', 'drawn_by' => $userId, 'drawn_at' => Carbon::now()]
+                : ['status' => 'drawing']);
+
+            return $winner;
         });
     }
 
     /**
-     * Rejoue le tirage pour une graine donnée. Déterministe : même liste, mêmes
-     * lots, mêmes options et même graine donnent exactement les mêmes sorties.
-     *
-     * @return array<int, array{prize_id:int, kind:string, rank:int, participant:object}>
-     */
-    public function simulate(Draw $draw, string $seed): array
-    {
-        $participants = $this->participants($draw)->all();
-        $pool         = new WeightedPool(array_map(fn ($p) => $this->weight($draw, $p), $participants));
-        $randomizer   = new Randomizer(new Xoshiro256StarStar(hex2bin($seed)));
-        $picks        = [];
-
-        foreach ($draw->prizes()->get() as $prize) {
-            $taken = [];
-
-            foreach (['winner' => $prize->quantity, 'substitute' => $prize->substitutes] as $kind => $count) {
-                for ($rank = 1; $rank <= $count; $rank++) {
-                    $i = $pool->pick($randomizer);
-                    if ($i === null) {
-                        break 2;   // plus personne dans l'urne
-                    }
-                    $pool->remove($i);   // jamais deux fois dans le même lot
-                    $taken[] = $i;
-                    $picks[] = ['prize_id' => $prize->id, 'kind' => $kind, 'rank' => $rank, 'participant' => $participants[$i]];
-                }
-            }
-
-            // Plusieurs lots possibles par client : il revient dans l'urne pour les lots suivants
-            if (!$draw->one_prize_per_client) {
-                foreach ($taken as $i) {
-                    $pool->restore($i, $this->weight($draw, $participants[$i]));
-                }
-            }
-        }
-
-        return $picks;
-    }
-
-    /**
-     * Contrôle d'intégrité : la liste n'a pas changé et le tirage rejoué avec la
-     * graine conservée redonne les mêmes gagnants et suppléants.
+     * Contrôle d'intégrité : la liste n'a pas changé, et chaque sortie rejouée
+     * avec sa graine (exclusions identiques à l'instant du tirage) redonne le
+     * même client.
      */
     public function verify(Draw $draw): array
     {
-        $listOk = hash_equals((string) $draw->eligible_hash, $this->hash($draw));
+        $listOk       = hash_equals((string) $draw->eligible_hash, $this->hash($draw));
+        $participants = $this->loadParticipants($draw, fresh: true);
+        $rows         = $draw->winners()->orderBy('id')->get();
+        $resultOk     = true;
+        $before       = [];
 
-        $key      = fn ($prizeId, $kind, $rank, $msisdn) => "{$prizeId}|{$kind}|{$rank}|{$msisdn}";
-        $expected = array_map(fn ($p) => $key($p['prize_id'], $p['kind'], $p['rank'], $p['participant']->msisdn), $this->simulate($draw, $draw->seed));
-        $stored   = $draw->winners()->whereIn('kind', ['winner', 'substitute'])->get()
-            ->map(fn ($w) => $key($w->draw_prize_id, $w->kind, $w->rank, $w->msisdn))->all();
+        foreach ($rows as $row) {
+            $excluded = [];
+            foreach ($before as $prev) {
+                if ($draw->one_prize_per_client || $prev->draw_prize_id === $row->draw_prize_id) {
+                    $excluded[$prev->msisdn] = true;
+                }
+            }
 
-        sort($expected);
-        sort($stored);
+            $replayed = $row->seed ? $this->choose($draw, $participants, $excluded, $row->seed) : null;
+            if ($replayed?->msisdn !== $row->msisdn) {
+                $resultOk = false;
+                break;
+            }
+            $before[] = $row;
+        }
 
-        return ['list_ok' => $listOk, 'result_ok' => $expected === $stored];
+        return ['list_ok' => $listOk, 'result_ok' => $resultOk];
     }
 
     // ── 3. Gagnant écarté ─────────────────────────────────────────────────
@@ -277,7 +273,7 @@ class DrawEngine
      */
     public function invalidate(DrawWinner $winner, string $reason, ?int $userId = null): ?DrawWinner
     {
-        if ($winner->draw->status !== 'drawn') {
+        if (!in_array($winner->draw->status, ['drawing', 'drawn'], true)) {
             throw new RuntimeException('Le tirage est clôturé : plus aucune modification possible.');
         }
         if ($winner->status !== 'valid') {
@@ -314,58 +310,83 @@ class DrawEngine
 
     /**
      * Tirage complémentaire pour remplacer un gagnant écarté quand le lot n'a
-     * plus de suppléant. Mêmes règles que le tirage principal (chances, un lot
-     * par client) ; aléa cryptographique, la sortie est tracée en « extra ».
+     * plus de suppléant. Mêmes règles que le tirage principal ; tracé en « extra ».
      */
     public function drawExtra(DrawWinner $replaced, ?int $userId = null): ?DrawWinner
     {
-        $draw = $replaced->draw;
+        return DB::transaction(function () use ($replaced) {
+            $draw = Draw::whereKey($replaced->draw_id)->lockForUpdate()->firstOrFail();
 
-        if ($draw->status !== 'drawn') {
-            throw new RuntimeException('Le tirage est clôturé : plus aucune modification possible.');
-        }
-        if ($replaced->status !== 'invalidated' || DrawWinner::where('replaces_id', $replaced->id)->exists()) {
-            throw new RuntimeException('Ce gagnant a déjà un remplaçant.');
-        }
+            if (!in_array($draw->status, ['drawing', 'drawn'], true)) {
+                throw new RuntimeException('Le tirage est clôturé : plus aucune modification possible.');
+            }
+            if ($replaced->status !== 'invalidated' || DrawWinner::where('replaces_id', $replaced->id)->exists()) {
+                throw new RuntimeException('Ce gagnant a déjà un remplaçant.');
+            }
 
-        // Déjà sortis (même invalidés) : sur tout le tirage, ou seulement ce lot
-        $alreadyOut = DrawWinner::where('draw_id', $draw->id)
-            ->when(!$draw->one_prize_per_client, fn ($q) => $q->where('draw_prize_id', $replaced->draw_prize_id))
-            ->pluck('msisdn')
-            ->flip();
+            $prize = $replaced->prize;
+            $rank  = (int) $prize->winners()->where('kind', 'extra')->max('rank') + 1;
 
-        $participants = $this->participants($draw)->reject(fn ($p) => isset($alreadyOut[$p->msisdn]))->values()->all();
-        $pool         = new WeightedPool(array_map(fn ($p) => $this->weight($draw, $p), $participants));
-        $i            = $pool->pick(new Randomizer());
-
-        if ($i === null) {
-            return null;
-        }
-
-        $p = $participants[$i];
-
-        return DrawWinner::create([
-            'draw_id'       => $draw->id,
-            'draw_prize_id' => $replaced->draw_prize_id,
-            'msisdn'        => $p->msisdn,
-            'name'          => $p->name,
-            'txn_count'     => $p->txn_count,
-            'kind'          => 'extra',
-            'rank'          => (int) DrawWinner::where('draw_prize_id', $replaced->draw_prize_id)->where('kind', 'extra')->max('rank') + 1,
-            'status'        => 'valid',
-            'replaces_id'   => $replaced->id,
-        ]);
+            return $this->pick($draw, $prize, 'extra', $rank, $replaced->id);
+        });
     }
 
     // ── Outils ────────────────────────────────────────────────────────────
 
-    /** Liste figée, toujours dans le même ordre (base du hash et du tirage) */
-    private function participants(Draw $draw)
+    /**
+     * Une sortie : nouvelle graine aléatoire, clients exclus = déjà sortis du
+     * tirage (un seul lot par client) ou de ce lot, quel que soit leur statut.
+     */
+    private function pick(Draw $draw, DrawPrize $prize, string $kind, int $rank, ?int $replacesId = null): ?DrawWinner
     {
-        return DB::table('draw_participants')
-            ->where('draw_id', $draw->id)
-            ->orderBy('msisdn')
-            ->get(['msisdn', 'name', 'txn_count']);
+        $excluded = DrawWinner::where('draw_id', $draw->id)
+            ->when(!$draw->one_prize_per_client, fn ($q) => $q->where('draw_prize_id', $prize->id))
+            ->pluck('msisdn')
+            ->flip()
+            ->all();
+
+        $seed = bin2hex(random_bytes(32));
+        $p    = $this->choose($draw, $this->loadParticipants($draw), $excluded, $seed);
+
+        return $p ? DrawWinner::create([
+            'draw_id'       => $draw->id,
+            'draw_prize_id' => $prize->id,
+            'msisdn'        => $p->msisdn,
+            'name'          => $p->name,
+            'txn_count'     => $p->txn_count,
+            'kind'          => $kind,
+            'rank'          => $rank,
+            'seed'          => $seed,
+            'status'        => 'valid',
+            'replaces_id'   => $replacesId,
+        ]) : null;
+    }
+
+    /** Tirage pondéré déterministe pour une graine donnée ; null si l'urne est vide */
+    private function choose(Draw $draw, array $participants, array $excluded, string $seed): ?object
+    {
+        $weights = array_map(fn ($p) => isset($excluded[$p->msisdn]) ? 0 : $this->weight($draw, $p), $participants);
+        $i       = (new WeightedPool($weights))->pick(new Randomizer(new Xoshiro256StarStar(hex2bin($seed))));
+
+        return $i === null ? null : $participants[$i];
+    }
+
+    /**
+     * Liste figée, toujours dans le même ordre (base du hash et du tirage).
+     * Gardée en mémoire pour les sorties successives d'une même requête ;
+     * relue en base (fresh) pour l'empreinte et la vérification.
+     */
+    private function loadParticipants(Draw $draw, bool $fresh = false): array
+    {
+        if ($fresh || !isset($this->participantsCache[$draw->id])) {
+            $this->participantsCache[$draw->id] = DB::table('draw_participants')
+                ->where('draw_id', $draw->id)
+                ->orderBy('msisdn')
+                ->get(['msisdn', 'name', 'txn_count'])
+                ->all();
+        }
+
+        return $this->participantsCache[$draw->id];
     }
 
     private function weight(Draw $draw, object $participant): int

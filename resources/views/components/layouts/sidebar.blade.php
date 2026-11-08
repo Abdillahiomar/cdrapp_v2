@@ -266,14 +266,27 @@
         @can('draws.view')
             <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Marketing</p>
 
+            @php $drawsActive = request()->routeIs('draws.*') && !request()->routeIs('draws.prizes'); @endphp
             <a href="{{ route('draws.index') }}" wire:navigate
-               style="{{ request()->routeIs('draws.*') ? $linkActive : $linkInactive }}">
+               style="{{ $drawsActive ? $linkActive : $linkInactive }}">
+                <svg width="15" height="15" viewBox="0 0 16 16" style="flex-shrink:0;">
+                    <rect x="2" y="3" width="12" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/>
+                    <circle cx="5.5" cy="6.5" r="1" fill="currentColor"/><circle cx="10.5" cy="10.5" r="1" fill="currentColor"/><circle cx="8" cy="8.5" r="1" fill="currentColor"/>
+                </svg>
+                Tirages au sort
+                @if($drawsActive)
+                    <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
+                @endif
+            </a>
+
+            <a href="{{ route('draws.prizes') }}" wire:navigate
+               style="{{ request()->routeIs('draws.prizes') ? $linkActive : $linkInactive }}">
                 <svg width="15" height="15" viewBox="0 0 16 16" style="flex-shrink:0;">
                     <rect x="2" y="6" width="12" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>
                     <path d="M1.5 6h13M8 6v8M8 6C6.5 3 4 3 4.5 4.6 5 6 8 6 8 6zM8 6c1.5-3 4-3 3.5-1.4C11 6 8 6 8 6z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
                 </svg>
-                Tirages au sort
-                @if(request()->routeIs('draws.*'))
+                Catalogue des lots
+                @if(request()->routeIs('draws.prizes'))
                     <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
                 @endif
             </a>

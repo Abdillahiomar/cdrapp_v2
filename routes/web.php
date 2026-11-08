@@ -72,13 +72,19 @@ Route::middleware(['auth', 'permission:tools.qrcode'])->prefix('outils/qr-code')
     Route::get('/{qrCode}/imprimer', [QrCodeController::class, 'print'])->name('print');
 });
 // Tirages au sort Marketing : consultation draws.view, actions draws.manage (vérifié dans les composants)
-Route::middleware(['auth', 'permission:draws.view'])->prefix('marketing/tirages')->name('draws.')->group(function () {
-    Volt::route('/', 'marketing.draws.index')->name('index');
-    Volt::route('/{draw}', 'marketing.draws.show')->name('show');
-    Volt::route('/{draw}/ecran', 'marketing.draws.screen')->name('screen');
-    Route::get('/{draw}/eligibles.csv', [DrawController::class, 'eligibles'])->name('eligibles');
-    Route::get('/{draw}/gagnants.csv', [DrawController::class, 'winners'])->name('winners');
-    Route::get('/{draw}/pv.pdf', [DrawController::class, 'pv'])->name('pv');
+Route::middleware(['auth', 'permission:draws.view'])->prefix('marketing')->name('draws.')->group(function () {
+    Volt::route('/lots', 'marketing.prizes.index')->name('prizes');
+    Route::get('/lots/images/{prizeImage}', [DrawController::class, 'prizeImage'])->name('prize-image');
+    Route::get('/tirages/lots/{drawPrize}/image', [DrawController::class, 'lotImage'])->name('lot-image');
+
+    Volt::route('/tirages', 'marketing.draws.index')->name('index');
+    Route::prefix('tirages/{draw}')->whereNumber('draw')->group(function () {
+        Volt::route('/', 'marketing.draws.show')->name('show');
+        Volt::route('/ecran', 'marketing.draws.screen')->name('screen');
+        Route::get('/eligibles.csv', [DrawController::class, 'eligibles'])->name('eligibles');
+        Route::get('/gagnants.csv', [DrawController::class, 'winners'])->name('winners');
+        Route::get('/pv.pdf', [DrawController::class, 'pv'])->name('pv');
+    });
 });
 Volt::route('/admin/exports','admin.exports.index')->name('admin.exports.index')->middleware(['auth', 'permission:admin.exports.view']);
 Volt::route('/profiles', 'admin.users.profile')->name('profile.index')->middleware('auth');

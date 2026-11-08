@@ -19,7 +19,7 @@ class DrawWinner extends Model
     ];
 
     protected $fillable = [
-        'draw_id', 'draw_prize_id', 'msisdn', 'name', 'txn_count', 'kind', 'rank', 'status',
+        'draw_id', 'draw_prize_id', 'msisdn', 'name', 'txn_count', 'kind', 'rank', 'seed', 'status',
         'replaces_id', 'promoted_at', 'invalidated_reason', 'invalidated_by', 'invalidated_at',
     ];
 
