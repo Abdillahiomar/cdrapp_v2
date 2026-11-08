@@ -5,6 +5,7 @@ use Livewire\Volt\Volt;
 
 use App\Http\Controllers\ReportingController;
 use App\Http\Controllers\QrCodeController;
+use App\Http\Controllers\DrawController;
 
 Route::get('/reporting/transactions/pptx',
     [ReportingController::class, 'exportTransactionsPptx'])
@@ -69,6 +70,15 @@ Route::middleware(['auth', 'permission:tools.qrcode'])->prefix('outils/qr-code')
     Route::get('/{qrCode}/png', [QrCodeController::class, 'png'])->name('png');
     Route::get('/{qrCode}/svg', [QrCodeController::class, 'svg'])->name('svg');
     Route::get('/{qrCode}/imprimer', [QrCodeController::class, 'print'])->name('print');
+});
+// Tirages au sort Marketing : consultation draws.view, actions draws.manage (vérifié dans les composants)
+Route::middleware(['auth', 'permission:draws.view'])->prefix('marketing/tirages')->name('draws.')->group(function () {
+    Volt::route('/', 'marketing.draws.index')->name('index');
+    Volt::route('/{draw}', 'marketing.draws.show')->name('show');
+    Volt::route('/{draw}/ecran', 'marketing.draws.screen')->name('screen');
+    Route::get('/{draw}/eligibles.csv', [DrawController::class, 'eligibles'])->name('eligibles');
+    Route::get('/{draw}/gagnants.csv', [DrawController::class, 'winners'])->name('winners');
+    Route::get('/{draw}/pv.pdf', [DrawController::class, 'pv'])->name('pv');
 });
 Volt::route('/admin/exports','admin.exports.index')->name('admin.exports.index')->middleware(['auth', 'permission:admin.exports.view']);
 Volt::route('/profiles', 'admin.users.profile')->name('profile.index')->middleware('auth');

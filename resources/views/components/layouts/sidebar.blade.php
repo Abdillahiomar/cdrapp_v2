@@ -261,7 +261,23 @@
                 @endif
             </a>
         @endcan
-        
+
+        {{-- ── MARKETING ── --}}
+        @can('draws.view')
+            <p style="font-size:9px; text-transform:uppercase; letter-spacing:1.2px; color:rgba(255,255,255,0.35); padding:0 8px; margin-bottom:6px; margin-top:16px;">Marketing</p>
+
+            <a href="{{ route('draws.index') }}" wire:navigate
+               style="{{ request()->routeIs('draws.*') ? $linkActive : $linkInactive }}">
+                <svg width="15" height="15" viewBox="0 0 16 16" style="flex-shrink:0;">
+                    <rect x="2" y="6" width="12" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>
+                    <path d="M1.5 6h13M8 6v8M8 6C6.5 3 4 3 4.5 4.6 5 6 8 6 8 6zM8 6c1.5-3 4-3 3.5-1.4C11 6 8 6 8 6z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                </svg>
+                Tirages au sort
+                @if(request()->routeIs('draws.*'))
+                    <span style="margin-left:auto; width:6px; height:6px; border-radius:50%; background:#FFC72C; flex-shrink:0;"></span>
+                @endif
+            </a>
+        @endcan
 
         {{-- ── ANALYSE ── --}}
         @canany(['daily-report.view'])
