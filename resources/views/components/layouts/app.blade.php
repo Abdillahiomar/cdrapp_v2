@@ -32,7 +32,21 @@
             overflow-x: hidden;
             position: sticky;
             top: 0;
+            transition: width .2s ease;
         }
+
+        /* ── Sidebar repliée (bouton à l'intersection sidebar / header) ── */
+        html.sidebar-collapsed .app-sidebar { width: 0; }
+        .sidebar-toggle {
+            position: fixed; top: 28px; left: 224px; transform: translate(-50%, -50%); z-index: 60;
+            width: 26px; height: 26px; border-radius: 50%; border: 1px solid #e5e7eb; background: #fff;
+            color: #1B2F6E; cursor: pointer; display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 2px 6px rgba(0,0,0,.15); transition: left .2s ease;
+        }
+        .sidebar-toggle:hover { background: #FFC72C; border-color: #FFC72C; }
+        .sidebar-toggle svg { transition: transform .2s ease; }
+        html.sidebar-collapsed .sidebar-toggle { left: 14px; }
+        html.sidebar-collapsed .sidebar-toggle svg { transform: rotate(180deg); }
 
         /* scrollbar sidebar discrète */
         .app-sidebar::-webkit-scrollbar { width: 4px; }
@@ -75,6 +89,16 @@
             flex-shrink: 0;
         }
     </style>
+    <script>
+        // État du sidebar mémorisé dans ce navigateur, appliqué avant l'affichage (pas de clignotement)
+        try { if (localStorage.getItem('sidebar.collapsed') === '1') document.documentElement.classList.add('sidebar-collapsed'); } catch (e) {}
+        window.toggleSidebar = function () {
+            const collapsed = document.documentElement.classList.toggle('sidebar-collapsed');
+            try { localStorage.setItem('sidebar.collapsed', collapsed ? '1' : '0'); } catch (e) {}
+            // les graphiques (Chart.js) se recalent sur la nouvelle largeur
+            setTimeout(() => window.dispatchEvent(new Event('resize')), 220);
+        };
+    </script>
 </head>
 
 <body>
@@ -84,6 +108,11 @@
         <div class="app-sidebar">
             @include('components.layouts.sidebar')
         </div>
+
+        {{-- Bouton replier / déplier le sidebar --}}
+        <button type="button" class="sidebar-toggle" onclick="toggleSidebar()" title="Replier / déplier le menu" aria-label="Replier / déplier le menu">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M7.5 2.5L4 6l3.5 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
 
         {{-- COLONNE DROITE --}}
         <div class="app-right">
@@ -147,6 +176,7 @@
         });
 
         document.addEventListener('livewire:navigated', () => {
+            try { document.documentElement.classList.toggle('sidebar-collapsed', localStorage.getItem('sidebar.collapsed') === '1'); } catch (e) {}
             clearInterval(window._navInterval);
             const fill = document.getElementById('nav-progress');
             if (fill) {

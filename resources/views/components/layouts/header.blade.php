@@ -1,4 +1,4 @@
-<header style="background:#fff; border-bottom:1px solid #e5e7eb; height:56px; padding:0 24px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
+<header style="background:#fff; border-bottom:1px solid #e5e7eb; height:56px; padding:0 24px 0 30px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
 
     <div>
         <h1 style="font-size:14px; font-weight:600; color:#111827; margin:0;">

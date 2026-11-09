@@ -845,7 +845,7 @@ new class extends Component {
         <div wire:key="reveal-{{ $reveal->id }}"
              x-data="drawReveal()"
              x-on:keydown.escape.window="if (!rolling) $wire.closeReveal()"
-             :style="'background:' + s.bg"
+             :style="{ background: s.bg }"
              style="position:fixed; inset:0; z-index:998; overflow-y:auto; background:#0F1D47;">
 
             <canvas x-ref="sky" style="position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:0;"></canvas>
@@ -884,7 +884,7 @@ new class extends Component {
                     <div style="flex:0 0 auto; background:#fff; border-radius:14px; padding:8px; width:clamp(64px,11vw,120px); height:clamp(64px,11vw,120px); display:flex; align-items:center; justify-content:center;">
                         <img src="{{ asset('images/qr-logo.png') }}" alt="D-Money" x-on:error="$el.parentElement.style.visibility = 'hidden'" style="max-width:100%; max-height:100%; object-fit:contain;">
                     </div>
-                    <h1 x-text="s.title" :style="'color:' + ink"
+                    <h1 x-text="s.title" :style="{ color: ink }"
                         style="flex:1 1 auto; margin:0; font-size:clamp(20px,3.4vw,40px); font-weight:900; line-height:1.15; text-transform:uppercase; letter-spacing:1px; color:#fff;"></h1>
                     <div style="flex:0 0 auto; background:#fff; border-radius:14px; padding:8px; width:clamp(64px,11vw,120px); height:clamp(64px,11vw,120px); display:flex; align-items:center; justify-content:center;">
                         <img src="{{ asset('images/qr-logo_dt.png') }}" alt="Djibouti Telecom" x-on:error="$el.parentElement.style.visibility = 'hidden'" style="max-width:100%; max-height:100%; object-fit:contain;">
@@ -921,7 +921,7 @@ new class extends Component {
                         </label>
                         <button wire:click="closeReveal" :disabled="rolling"
                                 style="background:#1B2F6E; color:#fff; font-size:15px; font-weight:700; padding:11px 32px; border-radius:10px; border:none; cursor:pointer;"
-                                :style="rolling ? 'opacity:.4; cursor:wait;' : ''">Fermer</button>
+                                :style="rolling ? { opacity: '.4', cursor: 'wait' } : {}">Fermer</button>
                     </div>
                 </div>
             </div>
