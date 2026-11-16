@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Models\Draw;
+use App\Models\DrawCeremony;
 use App\Models\DrawPrize;
 use App\Models\DrawWinner;
 use Carbon\Carbon;
@@ -26,6 +27,11 @@ use RuntimeException;
  *
  * Chaque sortie garde sa graine : verify() rejoue toutes les sorties dans leur
  * ordre (mêmes exclusions à l'instant du tirage) et doit retrouver les mêmes.
+ *
+ * Cérémonie : une liste (Draw) par catégorie. Un client sorti dans une liste
+ * est exclu de toutes les autres listes de la cérémonie (un seul lot par
+ * client) ; les sorties de la cérémonie sont sérialisées par un verrou sur
+ * celle-ci, leur ordre (id) suffit donc à rejouer les exclusions.
  */
 class DrawEngine
 {
@@ -159,7 +165,7 @@ class DrawEngine
     /** Retour au brouillon : la liste figée est supprimée */
     public function resetToDraft(Draw $draw): void
     {
-        if ($draw->isDrawn()) {
+        if ($draw->isDrawn() || $draw->ceremony?->hasStarted()) {
             throw new RuntimeException('Le tirage a commencé : la liste ne peut plus être modifiée.');
         }
 
@@ -195,12 +201,16 @@ class DrawEngine
     public function drawOne(DrawPrize $prize, ?int $userId = null): DrawWinner
     {
         return DB::transaction(function () use ($prize, $userId) {
-            // Verrou : deux clics simultanés ne peuvent pas tirer deux fois la même place
-            $draw = Draw::whereKey($prize->draw_id)->lockForUpdate()->firstOrFail();
+            // Verrous : deux clics simultanés (même sur deux catégories) ne tirent jamais en parallèle
+            $ceremony = $this->lockCeremony($prize->draw_id);
+            $draw     = Draw::whereKey($prize->draw_id)->lockForUpdate()->firstOrFail();
 
+            if ($ceremony?->isClosed()) {
+                throw new RuntimeException('La cérémonie est clôturée.');
+            }
             if (!in_array($draw->status, ['ready', 'drawing'], true)) {
                 throw new RuntimeException($draw->status === 'drawn'
-                    ? 'Tous les lots ont déjà été tirés.'
+                    ? 'Tous les lots de cette catégorie ont déjà été tirés.'
                     : 'Le tirage n\'est possible qu\'une fois la liste des éligibles figée et avant la clôture.');
             }
             if ($draw->status === 'ready' && !hash_equals((string) $draw->eligible_hash, $this->hash($draw))) {
@@ -228,6 +238,10 @@ class DrawEngine
                 ? ['status' => 'drawn', 'drawn_by' => $userId, 'drawn_at' => Carbon::now()]
                 : ['status' => 'drawing']);
 
+            if ($ceremony) {
+                $this->syncCeremony($ceremony, $userId);
+            }
+
             return $winner;
         });
     }
@@ -241,27 +255,43 @@ class DrawEngine
     {
         $listOk       = hash_equals((string) $draw->eligible_hash, $this->hash($draw));
         $participants = $this->loadParticipants($draw, fresh: true);
-        $rows         = $draw->winners()->orderBy('id')->get();
         $resultOk     = true;
         $before       = [];
 
-        foreach ($rows as $row) {
-            $excluded = [];
-            foreach ($before as $prev) {
-                if ($draw->one_prize_per_client || $prev->draw_prize_id === $row->draw_prize_id) {
-                    $excluded[$prev->msisdn] = true;
+        // Toutes les sorties de la cérémonie, dans leur ordre : celles des autres listes comptent dans les exclusions
+        foreach ($this->rivalWinners($draw)->orderBy('id')->get() as $row) {
+            if ($row->draw_id === $draw->id) {
+                $excluded = [];
+                foreach ($before as $prev) {
+                    if ($this->excludes($draw, $prev, $row->draw_prize_id)) {
+                        $excluded[$prev->msisdn] = true;
+                    }
                 }
-            }
 
-            $replayed = $row->seed ? $this->choose($draw, $participants, $excluded, $row->seed) : null;
-            if ($replayed?->msisdn !== $row->msisdn) {
-                $resultOk = false;
-                break;
+                $replayed = $row->seed ? $this->choose($draw, $participants, $excluded, $row->seed) : null;
+                if ($replayed?->msisdn !== $row->msisdn) {
+                    $resultOk = false;
+                    break;
+                }
             }
             $before[] = $row;
         }
 
         return ['list_ok' => $listOk, 'result_ok' => $resultOk];
+    }
+
+    /** Contrôle de toutes les listes d'une cérémonie (celles où au moins un tirage a eu lieu) */
+    public function verifyCeremony(DrawCeremony $ceremony): array
+    {
+        $byDraw = $ceremony->draws()->get()
+            ->filter->isDrawn()
+            ->mapWithKeys(fn (Draw $d) => [$d->id => $this->verify($d)]);
+
+        return [
+            'list_ok'   => $byDraw->every(fn ($r) => $r['list_ok']),
+            'result_ok' => $byDraw->every(fn ($r) => $r['result_ok']),
+            'draws'     => $byDraw->all(),
+        ];
     }
 
     // ── 3. Gagnant écarté ─────────────────────────────────────────────────
@@ -273,7 +303,7 @@ class DrawEngine
      */
     public function invalidate(DrawWinner $winner, string $reason, ?int $userId = null): ?DrawWinner
     {
-        if (!in_array($winner->draw->status, ['drawing', 'drawn'], true)) {
+        if (!in_array($winner->draw->status, ['drawing', 'drawn'], true) || $winner->draw->ceremony?->isClosed()) {
             throw new RuntimeException('Le tirage est clôturé : plus aucune modification possible.');
         }
         if ($winner->status !== 'valid') {
@@ -315,9 +345,10 @@ class DrawEngine
     public function drawExtra(DrawWinner $replaced, ?int $userId = null): ?DrawWinner
     {
         return DB::transaction(function () use ($replaced) {
-            $draw = Draw::whereKey($replaced->draw_id)->lockForUpdate()->firstOrFail();
+            $ceremony = $this->lockCeremony($replaced->draw_id);
+            $draw     = Draw::whereKey($replaced->draw_id)->lockForUpdate()->firstOrFail();
 
-            if (!in_array($draw->status, ['drawing', 'drawn'], true)) {
+            if (!in_array($draw->status, ['drawing', 'drawn'], true) || $ceremony?->isClosed()) {
                 throw new RuntimeException('Le tirage est clôturé : plus aucune modification possible.');
             }
             if ($replaced->status !== 'invalidated' || DrawWinner::where('replaces_id', $replaced->id)->exists()) {
@@ -334,13 +365,14 @@ class DrawEngine
     // ── Outils ────────────────────────────────────────────────────────────
 
     /**
-     * Une sortie : nouvelle graine aléatoire, clients exclus = déjà sortis du
-     * tirage (un seul lot par client) ou de ce lot, quel que soit leur statut.
+     * Une sortie : nouvelle graine aléatoire, clients exclus = déjà sortis dans
+     * une autre liste de la cérémonie, ou dans cette liste (un seul lot par
+     * client) ou ce lot, quel que soit leur statut.
      */
     private function pick(Draw $draw, DrawPrize $prize, string $kind, int $rank, ?int $replacesId = null): ?DrawWinner
     {
-        $excluded = DrawWinner::where('draw_id', $draw->id)
-            ->when(!$draw->one_prize_per_client, fn ($q) => $q->where('draw_prize_id', $prize->id))
+        $excluded = $this->rivalWinners($draw)->get(['draw_id', 'draw_prize_id', 'msisdn'])
+            ->filter(fn (DrawWinner $prev) => $this->excludes($draw, $prev, $prize->id))
             ->pluck('msisdn')
             ->flip()
             ->all();
@@ -360,6 +392,43 @@ class DrawEngine
             'status'        => 'valid',
             'replaces_id'   => $replacesId,
         ]) : null;
+    }
+
+    /** Sorties qui comptent pour les exclusions : toute la cérémonie, ou ce seul tirage s'il n'en a pas */
+    private function rivalWinners(Draw $draw)
+    {
+        return $draw->draw_ceremony_id
+            ? DrawWinner::whereIn('draw_id', Draw::where('draw_ceremony_id', $draw->draw_ceremony_id)->select('id'))
+            : DrawWinner::where('draw_id', $draw->id);
+    }
+
+    /** Une sortie antérieure exclut-elle son client pour ce lot ? */
+    private function excludes(Draw $draw, DrawWinner $prev, int $prizeId): bool
+    {
+        return $prev->draw_id !== $draw->id                // autre catégorie de la cérémonie : un seul lot par client
+            || $draw->one_prize_per_client
+            || $prev->draw_prize_id === $prizeId;
+    }
+
+    private function lockCeremony(int $drawId): ?DrawCeremony
+    {
+        $id = Draw::whereKey($drawId)->value('draw_ceremony_id');
+
+        return $id ? DrawCeremony::whereKey($id)->lockForUpdate()->first() : null;
+    }
+
+    /** Statut de la cérémonie d'après ses listes : en cours dès la 1re sortie, terminée quand tout est tiré */
+    private function syncCeremony(DrawCeremony $ceremony, ?int $userId): void
+    {
+        $draws   = Draw::where('draw_ceremony_id', $ceremony->id)->pluck('status');
+        $allDone = $draws->isNotEmpty() && $draws->every(fn ($s) => in_array($s, ['drawn', 'closed'], true));
+
+        if ($allDone && $ceremony->status !== 'done') {
+            $ceremony->update(['status' => 'done', 'drawn_by' => $userId, 'drawn_at' => Carbon::now(),
+                               'started_at' => $ceremony->started_at ?? Carbon::now()]);
+        } elseif (!$allDone && $ceremony->status === 'preparation') {
+            $ceremony->update(['status' => 'in_progress', 'started_at' => Carbon::now()]);
+        }
     }
 
     /** Tirage pondéré déterministe pour une graine donnée ; null si l'urne est vide */

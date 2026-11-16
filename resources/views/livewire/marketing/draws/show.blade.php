@@ -14,10 +14,11 @@ use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
 /**
- * Un tirage au sort, en 4 étapes : critères et options → lots (choisis dans le
- * catalogue) → liste des éligibles figée (job de queue) → tirage lot par lot,
- * chaque gagnant annoncé dans une fenêtre. Puis gestion des gagnants écartés et
- * clôture. Consultation : draws.view ; actions : draws.manage.
+ * Une liste d'éligibles d'une cérémonie (une catégorie de lots) : critères →
+ * lots de la catégorie (catalogue) → liste figée (job de queue). Le tirage se
+ * fait dans la salle de tirage de la cérémonie ; ici, suivi des résultats,
+ * gagnants écartés et tirages complémentaires.
+ * Consultation : draws.view ; préparation et remplacements : draws.manage.
  */
 new class extends Component {
     use WithPagination;
@@ -50,15 +51,20 @@ new class extends Component {
 
     public function mount(Draw $draw): void
     {
-        $this->draw = $draw;
+        $this->draw = $draw->load(['ceremony', 'category']);
         $this->fillForm();
+    }
+
+    /** La cérémonie a commencé : lots et liste ne bougent plus */
+    private function locked(): bool
+    {
+        return $this->draw->isDrawn() || (bool) $this->draw->ceremony?->hasStarted();
     }
 
     private function fillForm(): void
     {
         $d = $this->draw;
         $this->form = [
-            'name'                 => $d->name,
             'description'          => (string) $d->description,
             'period_start'         => $d->period_start->format('Y-m-d'),
             'period_end'           => $d->period_end->format('Y-m-d'),
@@ -66,7 +72,6 @@ new class extends Component {
             'min_txn_count'        => $d->min_txn_count,
             'min_txn_amount'       => (float) $d->min_txn_amount,
             'chance_mode'          => $d->chance_mode,
-            'one_prize_per_client' => $d->one_prize_per_client,
             'exclude_employees'    => $d->exclude_employees,
             'exclude_rds_lite'     => $d->exclude_rds_lite,
             'exclude_winners_days' => $d->exclude_winners_days,
@@ -116,7 +121,6 @@ new class extends Component {
         }
 
         $this->validate([
-            'form.name'                 => 'required|string|max:255',
             'form.description'          => 'nullable|string|max:2000',
             'form.period_start'         => 'required|date',
             'form.period_end'           => 'required|date|after_or_equal:form.period_start',
@@ -127,7 +131,6 @@ new class extends Component {
             'form.exclude_winners_days' => 'nullable|integer|min:1|max:3650',
             'form.blacklist'            => 'nullable|string|max:20000',
         ], [
-            'form.name.required'             => 'Le nom est obligatoire.',
             'form.period_end.after_or_equal' => 'La date de fin doit suivre la date de début.',
             'form.txn_indexes.required'      => 'Sélectionnez au moins un type de transaction.',
             'form.txn_indexes.min'           => 'Sélectionnez au moins un type de transaction.',
@@ -135,7 +138,6 @@ new class extends Component {
         ]);
 
         $this->draw->update([
-            'name'                 => trim($this->form['name']),
             'description'          => trim($this->form['description']) ?: null,
             'period_start'         => $this->form['period_start'],
             'period_end'           => $this->form['period_end'],
@@ -143,7 +145,6 @@ new class extends Component {
             'min_txn_count'        => (int) $this->form['min_txn_count'],
             'min_txn_amount'       => (float) $this->form['min_txn_amount'],
             'chance_mode'          => $this->form['chance_mode'],
-            'one_prize_per_client' => (bool) $this->form['one_prize_per_client'],
             'exclude_employees'    => (bool) $this->form['exclude_employees'],
             'exclude_rds_lite'     => (bool) $this->form['exclude_rds_lite'],
             'exclude_winners_days' => $this->form['exclude_winners_days'] ?: null,
@@ -183,7 +184,7 @@ new class extends Component {
     {
         $this->authorizeManage();
 
-        if ($this->draw->isDrawn()) {
+        if ($this->locked()) {
             session()->flash('error', 'Le tirage a commencé : les lots ne sont plus modifiables.');
             return;
         }
@@ -197,7 +198,9 @@ new class extends Component {
             'prizeForm.quantity.min'      => 'Au moins 1.',
         ]);
 
-        $catalog = Prize::with(['category', 'mainImage'])->findOrFail($this->prizeForm['prize_id']);
+        $catalog = Prize::with(['category', 'mainImage'])
+            ->when($this->draw->prize_category_id, fn ($q) => $q->where('prize_category_id', $this->draw->prize_category_id))
+            ->findOrFail($this->prizeForm['prize_id']);
         $current = $this->editingPrizeId ? $this->draw->prizes()->findOrFail($this->editingPrizeId) : null;
 
         $data = [
@@ -245,7 +248,7 @@ new class extends Component {
     {
         $this->authorizeManage();
 
-        if (!$this->draw->isDrawn()) {
+        if (!$this->locked()) {
             $prize = $this->draw->prizes()->findOrFail($id);
             if ($prize->image_path) {
                 Storage::disk('local')->delete($prize->image_path);
@@ -259,7 +262,7 @@ new class extends Component {
     {
         $this->authorizeManage();
 
-        if ($this->draw->isDrawn()) {
+        if ($this->locked()) {
             return;
         }
 
@@ -307,17 +310,7 @@ new class extends Component {
         $this->resetPage('participants');
     }
 
-    // ── Étape 4 : tirage lot par lot ──────────────────────────────────────
-
-    /** Tire un gagnant pour ce lot et l'annonce dans la fenêtre de résultat */
-    public function drawPrize(int $prizeId): void
-    {
-        $this->authorizeManage();
-        $prize  = $this->draw->prizes()->findOrFail($prizeId);
-        $winner = $this->attempt(fn () => $this->engine()->drawOne($prize, auth()->id()));
-
-        $this->revealId = $winner?->id;
-    }
+    // ── Étape 4 : résultats (le tirage se fait dans la salle de tirage) ───
 
     public function closeReveal(): void
     {
@@ -370,28 +363,20 @@ new class extends Component {
         $this->verifyResult = $this->engine()->verify($this->draw) + ['at' => Carbon::now()->format('d/m/Y H:i:s')];
     }
 
-    public function closeDraw(): void
-    {
-        $this->authorizeManage();
-
-        if (in_array($this->draw->status, ['drawing', 'drawn'], true)) {
-            $this->draw->update(['status' => 'closed', 'closed_by' => auth()->id(), 'closed_at' => Carbon::now()]);
-            session()->flash('success', 'Tirage clôturé : il est désormais en lecture seule.');
-        }
-    }
-
+    /** Retire cette catégorie de la cérémonie (avant le premier tirage) */
     public function deleteDraw(): void
     {
         $this->authorizeManage();
 
-        if ($this->draw->isDrawn()) {
-            session()->flash('error', 'Un tirage commencé ne peut pas être supprimé (traçabilité).');
+        if ($this->locked()) {
+            session()->flash('error', 'La cérémonie a commencé : cette liste ne peut plus être supprimée (traçabilité).');
             return;
         }
 
+        $ceremonyId = $this->draw->draw_ceremony_id;
         Storage::disk('local')->deleteDirectory('draws/' . $this->draw->id);
         $this->draw->delete();
-        $this->redirectRoute('draws.index', navigate: true);
+        $this->redirectRoute('draws.ceremony', $ceremonyId, navigate: true);
     }
 
     public function with(): array
@@ -422,6 +407,7 @@ new class extends Component {
         // Catalogue proposé dans la fenêtre « Ajouter un lot » (lots actifs + celui déjà choisi)
         $catalog = $this->showPrizeForm
             ? Prize::with(['category', 'mainImage'])
+                ->when($this->draw->prize_category_id, fn ($q) => $q->where('prize_category_id', $this->draw->prize_category_id))
                 ->where(fn ($q) => $q->where('is_active', true)->orWhere('id', (int) $this->prizeForm['prize_id']))
                 ->get()
                 ->sortBy(fn ($p) => [$p->category->position, $p->category->name, $p->name])
@@ -446,6 +432,8 @@ new class extends Component {
             'reveal'       => $reveal,
             'revealPrize'  => $reveal ? $prizes->firstWhere('id', $reveal->draw_prize_id) : null,
             'canManage'    => auth()->user()->can('draws.manage'),
+            'canRun'       => auth()->user()->can('draws.run'),
+            'locked'       => $this->locked(),
         ];
     }
 };
@@ -463,35 +451,33 @@ new class extends Component {
     $step       = fn ($n, $done) => '<span style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:11px; font-size:11px; font-weight:700; margin-right:8px; ' . ($done ? 'background:#00843D; color:#fff;' : 'background:#E8ECF8; color:#1B2F6E;') . '">' . ($done ? '✓' : $n) . '</span>';
     $badge      = fn ($name, $color) => $name ? '<span style="display:inline-block; padding:2px 8px; border-radius:8px; font-size:10px; font-weight:700; color:#fff; background:' . e($color ?: '#6b7280') . ';">' . e($name) . '</span>' : '';
     [$sLabel, $sFg, $sBg] = $draw->statusLabel();
-    $editable   = $canManage && $draw->isEditable();
-    $canDraw    = $canManage && in_array($draw->status, ['ready', 'drawing'], true);
+    $editable   = $canManage && $draw->isEditable() && !$locked;
     $fmt        = fn ($n) => number_format((float) $n, 0, ',', ' ');
+    $ceremony   = $draw->ceremony;
 @endphp
 
     {{-- EN-TÊTE --}}
     <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:16px; gap:12px; flex-wrap:wrap;">
         <div>
-            <a href="{{ route('draws.index') }}" wire:navigate style="font-size:12px; color:#6b7280; text-decoration:none;">← Tirages au sort</a>
+            <a href="{{ route('draws.ceremony', $ceremony) }}" wire:navigate style="font-size:12px; color:#6b7280; text-decoration:none;">← {{ $ceremony->name }}</a>
             <h2 style="font-size:17px; font-weight:700; color:#111827; margin:6px 0 4px;">
-                {{ $draw->name }}
+                Liste d'éligibles {!! $badge($draw->categoryName(), $draw->categoryColor()) !!}
                 <span style="display:inline-block; vertical-align:middle; margin-left:8px; padding:3px 10px; border-radius:10px; font-size:11px; font-weight:600; color:{{ $sFg }}; background:{{ $sBg }};">{{ $sLabel }}</span>
             </h2>
             <p style="font-size:12px; color:#9ca3af; margin:0;">
-                Créé par {{ $draw->creator?->name ?? '—' }} le {{ $draw->created_at->format('d/m/Y H:i') }}
+                Créée par {{ $draw->creator?->name ?? '—' }} le {{ $draw->created_at->format('d/m/Y H:i') }}
                 · période du {{ $draw->period_start->format('d/m/Y') }} au {{ $draw->period_end->format('d/m/Y') }}
             </p>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            @if($draw->isDrawn())
-                <a href="{{ route('draws.screen', $draw) }}" target="_blank" style="{{ $btnPrimary }}">Tableau d'honneur ↗</a>
-                <a href="{{ route('draws.pv', $draw) }}" style="{{ $btnLight }}">PV (PDF)</a>
-                <a href="{{ route('draws.winners', $draw) }}" style="{{ $btnLight }}">Gagnants (CSV)</a>
+            @if($canRun && in_array($ceremony->status, ['preparation', 'in_progress', 'done'], true) && $ceremony->isReady())
+                <a href="{{ route('draws.room', $ceremony) }}" target="_blank" style="{{ $btnPrimary }}">Salle de tirage ↗</a>
             @endif
             @if($participants)
                 <a href="{{ route('draws.eligibles', $draw) }}" style="{{ $btnLight }}">Éligibles (CSV)</a>
             @endif
-            @if($canManage && !$draw->isDrawn() && $draw->status !== 'computing')
-                <button wire:click="deleteDraw" wire:confirm="Supprimer définitivement ce tirage ?" style="{{ $btnDanger }} padding:8px 14px; font-size:12px;">Supprimer</button>
+            @if($canManage && !$locked && $draw->status !== 'computing')
+                <button wire:click="deleteDraw" wire:confirm="Retirer cette catégorie de la cérémonie ? Ses critères, sa liste et ses lots seront supprimés." style="{{ $btnDanger }} padding:8px 14px; font-size:12px;">Supprimer la catégorie</button>
             @endif
         </div>
     </div>
@@ -515,11 +501,6 @@ new class extends Component {
 
             {{-- Colonne gauche : période, types, seuils --}}
             <div style="display:flex; flex-direction:column; gap:14px;">
-                <div>
-                    <label style="{{ $labelStyle }}">Nom du tirage</label>
-                    <input type="text" wire:model="form.name" @disabled(!$editable) style="{{ $inputStyle }}">
-                    @error('form.name') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
-                </div>
                 <div>
                     <label style="{{ $labelStyle }}">Description</label>
                     <textarea wire:model="form.description" rows="2" @disabled(!$editable) style="{{ $inputStyle }} resize:vertical;"></textarea>
@@ -579,9 +560,13 @@ new class extends Component {
                 </div>
                 <div>
                     <label style="{{ $labelStyle }}">Lots par client</label>
-                    <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#374151;">
-                        <input type="checkbox" wire:model="form.one_prize_per_client" @disabled(!$editable)> Un seul lot par client (un gagnant ne peut plus sortir pour les lots tirés ensuite)
-                    </label>
+                    <p style="font-size:12px; color:#374151; margin:0;">
+                        @if($draw->prize_category_id)
+                            Un seul lot par client sur toute la cérémonie : un client déjà gagnant dans une catégorie est exclu des tirages suivants, quelle que soit la catégorie.
+                        @else
+                            {{ $draw->one_prize_per_client ? 'Un seul lot par client' : 'Plusieurs lots possibles par client' }} (tirage repris de l'ancienne version).
+                        @endif
+                    </p>
                 </div>
                 <div>
                     <label style="{{ $labelStyle }}">Exclusions</label>
@@ -619,7 +604,7 @@ new class extends Component {
             </p>
             <div style="display:flex; gap:8px;">
                 <a href="{{ route('draws.prizes') }}" wire:navigate style="{{ $btnLight }}">Catalogue des lots</a>
-                @if($canManage && !$draw->isDrawn())
+                @if($canManage && !$locked)
                     <button wire:click="createPrize" style="{{ $btnPrimary }}">+ Ajouter un lot</button>
                 @endif
             </div>
@@ -645,7 +630,7 @@ new class extends Component {
                         <td style="padding:9px 16px; text-align:right;">{{ $prize->quantity }}</td>
                         <td style="padding:9px 16px; text-align:right;">{{ $prize->substitutes }}</td>
                         <td style="padding:9px 16px; text-align:right; white-space:nowrap;">
-                            @if($canManage && !$draw->isDrawn())
+                            @if($canManage && !$locked)
                                 <button wire:click="movePrize({{ $prize->id }}, -1)" @disabled($i === 0) style="border:none; background:none; cursor:pointer; color:#1B2F6E;">▲</button>
                                 <button wire:click="movePrize({{ $prize->id }}, 1)" @disabled($i === $prizes->count() - 1) style="border:none; background:none; cursor:pointer; color:#1B2F6E;">▼</button>
                                 <button wire:click="editPrize({{ $prize->id }})" style="{{ $btnLight }} font-size:11px; padding:5px 10px;">Modifier</button>
@@ -667,7 +652,7 @@ new class extends Component {
             <div style="display:flex; gap:8px;">
                 @if($canManage && $draw->status === 'draft')
                     <button wire:click="computeEligibles" wire:loading.attr="disabled" style="{{ $btnPrimary }}">Calculer et figer la liste</button>
-                @elseif($canManage && $draw->status === 'ready')
+                @elseif($canManage && $draw->status === 'ready' && !$locked)
                     <button wire:click="backToDraft" wire:confirm="La liste figée sera supprimée et les critères redeviendront modifiables. Continuer ?" style="{{ $btnLight }}">Modifier les critères</button>
                 @endif
             </div>
@@ -726,16 +711,13 @@ new class extends Component {
         </div>
     </div>
 
-    {{-- ÉTAPE 4 : TIRAGE LOT PAR LOT --}}
+    {{-- ÉTAPE 4 : RÉSULTATS (le tirage se fait dans la salle de tirage de la cérémonie) --}}
     <div style="{{ $card }}">
         <div style="{{ $cardHead }}">
-            <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">{!! $step(4, in_array($draw->status, ['drawn', 'closed'])) !!}Tirage au sort, lot par lot</p>
+            <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">{!! $step(4, in_array($draw->status, ['drawn', 'closed'])) !!}Résultats et remplacements</p>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 @if($draw->isDrawn())
                     <button wire:click="verify" style="{{ $btnLight }}">Vérifier l'intégrité</button>
-                @endif
-                @if($canManage && in_array($draw->status, ['drawing', 'drawn']))
-                    <button wire:click="closeDraw" wire:confirm="Clôturer le tirage ? Plus aucun lot ne pourra être tiré et aucun gagnant écarté ou remplacé." style="{{ $btnPrimary }}">Clôturer</button>
                 @endif
             </div>
         </div>
@@ -743,16 +725,15 @@ new class extends Component {
             @if(in_array($draw->status, ['draft', 'computing']))
                 <p style="font-size:12px; color:#6b7280; margin:0;">Disponible une fois la liste des éligibles figée.</p>
             @elseif($prizes->isEmpty())
-                <p style="font-size:12px; color:#B42318; margin:0;">Ajoutez au moins un lot avant de lancer le tirage.</p>
+                <p style="font-size:12px; color:#B42318; margin:0;">Ajoutez au moins un lot de la catégorie pour qu'elle apparaisse dans la salle de tirage.</p>
             @else
                 <p style="font-size:11px; color:#6b7280; margin:0 0 6px; line-height:1.7;">
                     {{ $fmt($draw->eligible_count) }} client(s) éligible(s) · {{ $effective }} gagnant(s) retenu(s) sur {{ $lotsTotal }}
-                    · {{ $draw->one_prize_per_client ? 'un seul lot par client' : 'plusieurs lots possibles par client' }}
                     @if($draw->drawn_at) · tous les lots tirés le {{ $draw->drawn_at->format('d/m/Y H:i') }} @endif
-                    @if($draw->closed_at) · clôturé le {{ $draw->closed_at->format('d/m/Y H:i') }} par {{ $draw->closer?->name ?? '—' }} @endif
+                    @if($draw->closed_at) · clôturée le {{ $draw->closed_at->format('d/m/Y H:i') }} @endif
                 </p>
                 @if($draw->status === 'ready')
-                    <p style="font-size:12px; color:#374151; margin:0 0 6px;">Choisissez un lot et cliquez sur « Tirer au sort » : un gagnant est tiré à chaque clic. Les suppléants du lot sont tirés automatiquement après son dernier gagnant.</p>
+                    <p style="font-size:12px; color:#374151; margin:0 0 6px;">Le tirage se fait dans la <strong>salle de tirage</strong> de la cérémonie : un clic par gagnant, suppléants tirés automatiquement après le dernier gagnant de chaque lot.</p>
                 @endif
 
                 @if($verifyResult)
@@ -780,15 +761,8 @@ new class extends Component {
                                     <span style="font-size:11px; color:#6b7280; margin-left:6px;">{{ $drawnCount }} / {{ $prize->quantity }} tiré(s) · {{ $kept }} retenu(s)</span>
                                 </p>
                             </div>
-                            @if($canDraw)
-                                @if($drawnCount < $prize->quantity)
-                                    <button wire:click="drawPrize({{ $prize->id }})" wire:loading.attr="disabled" wire:target="drawPrize"
-                                            style="background:#00843D; color:#fff; font-size:13px; font-weight:700; padding:9px 20px; border-radius:8px; border:none; cursor:pointer;">
-                                        🎲 Tirer au sort{{ $prize->quantity > 1 ? ' (' . ($drawnCount + 1) . '/' . $prize->quantity . ')' : '' }}
-                                    </button>
-                                @else
-                                    <span style="font-size:12px; font-weight:700; color:#005C2B;">✓ Lot tiré</span>
-                                @endif
+                            @if($drawnCount >= $prize->quantity)
+                                <span style="font-size:12px; font-weight:700; color:#005C2B;">✓ Lot tiré</span>
                             @endif
                         </div>
                         @if($prize->winners->isNotEmpty())
@@ -837,96 +811,8 @@ new class extends Component {
         </div>
     </div>
 
-    {{-- FENÊTRE DE RÉSULTAT : un gagnant, fermée par l'utilisateur --}}
-    {{-- Plein écran : logos + titre + catégorie, feux d'artifice et son au moment où le gagnant
-         s'affiche (pas pendant le défilement). Titre, fond, durée du son et son on/off se règlent
-         via ⚙ et sont mémorisés dans ce navigateur (voir drawReveal dans le script en bas de page). --}}
-    @if($reveal && $revealPrize)
-        <div wire:key="reveal-{{ $reveal->id }}"
-             x-data="drawReveal()"
-             x-on:keydown.escape.window="if (!rolling) $wire.closeReveal()"
-             :style="{ background: s.bg }"
-             style="position:fixed; inset:0; z-index:998; overflow-y:auto; background:#0F1D47;">
-
-            <canvas x-ref="sky" style="position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:0;"></canvas>
-
-            {{-- Boutons son / réglages --}}
-            <div style="position:fixed; top:14px; right:16px; z-index:3; display:flex; gap:8px;">
-                <button type="button" x-on:click="toggleSound()" :title="s.sound ? 'Couper le son' : 'Activer le son'"
-                        style="width:40px; height:40px; border-radius:50%; border:none; background:rgba(255,255,255,.18); font-size:18px; cursor:pointer;"
-                        x-text="s.sound ? '🔊' : '🔇'"></button>
-                <button type="button" x-on:click="settingsOpen = !settingsOpen" title="Réglages de l'écran"
-                        style="width:40px; height:40px; border-radius:50%; border:none; background:rgba(255,255,255,.18); font-size:18px; cursor:pointer;">⚙</button>
-            </div>
-            <div x-show="settingsOpen" x-cloak x-on:click.outside="settingsOpen = false"
-                 style="position:fixed; top:62px; right:16px; z-index:3; width:280px; background:#fff; color:#111827; border-radius:12px; box-shadow:0 18px 50px rgba(0,0,0,.35); padding:16px; text-align:left; font-size:12px;">
-                <p style="font-weight:800; font-size:13px; margin:0 0 12px;">Réglages de l'écran</p>
-                <label style="display:block; color:#6b7280; margin-bottom:4px;">Titre</label>
-                <input type="text" x-model="s.title" x-on:input="save()" style="width:100%; border:1px solid #d1d5db; border-radius:8px; padding:6px 8px; font-size:12px; margin-bottom:10px;">
-                <label style="display:block; color:#6b7280; margin-bottom:4px;">Couleur du fond</label>
-                <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
-                    <input type="color" x-model="s.bg" x-on:input="save()" style="width:44px; height:30px; border:none; padding:0; background:none; cursor:pointer;">
-                    <span x-text="s.bg" style="font-family:monospace;"></span>
-                </div>
-                <label style="display:block; color:#6b7280; margin-bottom:4px;">Durée du son (secondes)</label>
-                <input type="number" min="1" max="30" x-model.number="s.duration" x-on:change="save()" style="width:90px; border:1px solid #d1d5db; border-radius:8px; padding:6px 8px; font-size:12px; margin-bottom:10px;">
-                <label style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
-                    <input type="checkbox" x-model="s.sound" x-on:change="save()"> Son activé
-                </label>
-                <button type="button" x-on:click="resetSettings()" style="border:1px solid #d1d5db; background:#fff; border-radius:8px; padding:6px 10px; font-size:11px; cursor:pointer;">Valeurs par défaut</button>
-                <p style="color:#9ca3af; font-size:10px; margin:10px 0 0;">Réglages mémorisés sur cet ordinateur.</p>
-            </div>
-
-            <div style="position:relative; z-index:1; min-height:100%; max-width:1100px; margin:0 auto; padding:28px 24px 32px; display:flex; flex-direction:column; align-items:center; text-align:center;">
-
-                {{-- En-tête : logo D-Money | titre | logo Djibouti Telecom --}}
-                <div style="width:100%; display:flex; align-items:center; justify-content:space-between; gap:16px;">
-                    <div style="flex:0 0 auto; background:#fff; border-radius:14px; padding:8px; width:clamp(64px,11vw,120px); height:clamp(64px,11vw,120px); display:flex; align-items:center; justify-content:center;">
-                        <img src="{{ asset('images/qr-logo.png') }}" alt="D-Money" x-on:error="$el.parentElement.style.visibility = 'hidden'" style="max-width:100%; max-height:100%; object-fit:contain;">
-                    </div>
-                    <h1 x-text="s.title" :style="{ color: ink }"
-                        style="flex:1 1 auto; margin:0; font-size:clamp(20px,3.4vw,40px); font-weight:900; line-height:1.15; text-transform:uppercase; letter-spacing:1px; color:#fff;"></h1>
-                    <div style="flex:0 0 auto; background:#fff; border-radius:14px; padding:8px; width:clamp(64px,11vw,120px); height:clamp(64px,11vw,120px); display:flex; align-items:center; justify-content:center;">
-                        <img src="{{ asset('images/qr-logo_dt.png') }}" alt="Djibouti Telecom" x-on:error="$el.parentElement.style.visibility = 'hidden'" style="max-width:100%; max-height:100%; object-fit:contain;">
-                    </div>
-                </div>
-
-                <p style="margin:16px 0 22px; background:{{ $revealPrize->category_color ?? '#1B2F6E' }}; color:#fff; font-size:clamp(14px,1.8vw,20px); font-weight:800; letter-spacing:4px; text-transform:uppercase; padding:8px 26px; border-radius:999px; box-shadow:0 0 0 3px rgba(255,255,255,.35);">
-                    {{ $revealPrize->category_name ?? 'Lot' }}
-                </p>
-
-                {{-- Lot + gagnant --}}
-                <div style="width:min(760px,100%); background:#fff; border-radius:20px; box-shadow:0 30px 80px rgba(0,0,0,.45); padding:24px 28px 22px;">
-                    @if($revealPrize->imageUrl())
-                        <img src="{{ $revealPrize->imageUrl() }}" alt="" style="max-width:100%; max-height:34vh; object-fit:contain; display:block; margin:0 auto 14px;">
-                    @endif
-                    <p style="font-size:clamp(20px,2.6vw,30px); font-weight:800; color:#111827; margin:0;">🎁 {{ $revealPrize->name }}</p>
-                    @if($reveal->kind === 'extra' || $reveal->promoted_at)
-                        <p style="font-size:12px; color:#92400E; margin:4px 0 0;">Remplacement d'un gagnant écarté</p>
-                    @endif
-
-                    <div style="margin:20px 0 6px; padding:18px; border-radius:14px; background:#F7F8FC;">
-                        <p style="font-size:13px; color:#6b7280; margin:0 0 6px; text-transform:uppercase; letter-spacing:2px;">Gagnant</p>
-                        <p x-show="rolling" style="font-size:clamp(32px,4.4vw,52px); font-weight:800; font-family:monospace; color:#1B2F6E; margin:0; letter-spacing:3px;" x-text="roll"></p>
-                        <div x-show="!rolling" x-cloak x-transition.scale.90.opacity.duration.500ms>
-                            <p style="font-size:clamp(28px,4vw,46px); font-weight:900; color:#00843D; margin:0;">🎉 {{ $reveal->name ?? '—' }}</p>
-                            <p style="font-size:clamp(24px,3.2vw,36px); font-weight:700; font-family:monospace; color:#111827; margin:8px 0 0; letter-spacing:2px;"
-                               x-text="full ? @js(\App\Support\DrawEngine::display($reveal->msisdn)) : @js(\App\Support\DrawEngine::mask($reveal->msisdn))"></p>
-                        </div>
-                    </div>
-
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px; gap:10px; flex-wrap:wrap;">
-                        <label style="font-size:11px; color:#9ca3af; display:flex; align-items:center; gap:6px;">
-                            <input type="checkbox" x-model="full"> Afficher le numéro complet
-                        </label>
-                        <button wire:click="closeReveal" :disabled="rolling"
-                                style="background:#1B2F6E; color:#fff; font-size:15px; font-weight:700; padding:11px 32px; border-radius:10px; border:none; cursor:pointer;"
-                                :style="rolling ? { opacity: '.4', cursor: 'wait' } : {}">Fermer</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    @endif
+    {{-- FENÊTRE DE RÉSULTAT (partagée avec la salle de tirage) --}}
+    @include('draws.partials.reveal')
 
     {{-- MODAL LOT (choix dans le catalogue) --}}
     @if($showPrizeForm)
@@ -1005,185 +891,9 @@ new class extends Component {
         </div>
     @endif
 
-{{--
-    Fenêtre de résultat : Alpine.data('drawReveal'). Le bloc doit commencer par une déclaration
-    (const), sinon Livewire l'évalue comme une expression. Le son est synthétisé (Web Audio) :
-    fanfare + applaudissements + détonations, aucun fichier audio à déployer.
---}}
 @script
 <script>
-    const REVEAL_KEY = 'draws.reveal.settings';
-    const REVEAL_DEFAULTS = { title: 'La grande tombola Djibouti Telecom & D-Money', bg: '#0F1D47', duration: 5, sound: true };
-
-    // Objets navigateur (AudioContext, timers…) gardés hors de l'état réactif d'Alpine :
-    // enveloppés dans un proxy, ils lèveraient « Illegal invocation ».
-    Alpine.data('drawReveal', () => { const k = { timers: [], raf: null, onResize: null, ctx: null, master: null, noise: null, end: 0 }; return {
-        rolling: true, full: false, roll: '', settingsOpen: false,
-        s: { ...REVEAL_DEFAULTS },
-
-        init() {
-            try { Object.assign(this.s, JSON.parse(localStorage.getItem(REVEAL_KEY) || '{}')); } catch (e) {}
-            const t = setInterval(() => this.roll = '2537****' + String(Math.floor(Math.random() * 1000)).padStart(3, '0'), 70);
-            k.timers.push(t, setTimeout(() => { clearInterval(t); this.rolling = false; this.celebrate(); }, 2600));
-        },
-
-        destroy() {
-            k.timers.forEach(id => { clearInterval(id); clearTimeout(id); });
-            cancelAnimationFrame(k.raf);
-            if (k.onResize) window.removeEventListener('resize', k.onResize);
-            this.stopSound();
-        },
-
-        save() {
-            this.s.duration = Math.min(30, Math.max(1, parseInt(this.s.duration) || REVEAL_DEFAULTS.duration));
-            try { localStorage.setItem(REVEAL_KEY, JSON.stringify(this.s)); } catch (e) {}
-        },
-
-        resetSettings() { this.s = { ...REVEAL_DEFAULTS }; this.save(); },
-
-        // Couleur du titre selon la clarté du fond choisi
-        get ink() {
-            const h = (this.s.bg || '#000000').replace('#', '');
-            const [r, g, b] = [0, 2, 4].map(i => parseInt(h.substr(i, 2), 16) || 0);
-            return (0.299 * r + 0.587 * g + 0.114 * b) > 160 ? '#111827' : '#FFFFFF';
-        },
-
-        celebrate() {
-            this.fireworks();
-            if (this.s.sound) this.playSound();
-        },
-
-        toggleSound() {
-            this.s.sound = !this.s.sound;
-            this.save();
-            if (!this.s.sound) this.stopSound();
-            else if (!this.rolling) this.playSound();
-        },
-
-        // ---------- Feux d'artifice (canvas), tant que la fenêtre est ouverte ----------
-        fireworks() {
-            const canvas = this.$refs.sky;
-            if (!canvas) return;
-            const c = canvas.getContext('2d');
-            const fit = () => {
-                const dpr = window.devicePixelRatio || 1;
-                canvas.width = window.innerWidth * dpr; canvas.height = window.innerHeight * dpr;
-                c.setTransform(dpr, 0, 0, dpr, 0, 0);
-            };
-            fit();
-            k.onResize = fit;
-            window.addEventListener('resize', fit);
-
-            const rockets = [], sparks = [];
-            const W = () => window.innerWidth, H = () => window.innerHeight;
-            let next = 0;
-
-            const launch = () => {
-                rockets.push({ x: W() * (0.1 + Math.random() * 0.8), y: H(), vx: (Math.random() - 0.5) * 1.5,
-                               vy: -(H() / 70 + Math.random() * 4), top: H() * (0.12 + Math.random() * 0.35),
-                               hue: Math.floor(Math.random() * 360) });
-            };
-            const explode = (r) => {
-                const n = 60 + Math.floor(Math.random() * 50);
-                for (let i = 0; i < n; i++) {
-                    const a = (Math.PI * 2 * i) / n, v = 2 + Math.random() * 4.5;
-                    sparks.push({ x: r.x, y: r.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1,
-                                  decay: 0.010 + Math.random() * 0.012, hue: r.hue + (Math.random() * 40 - 20) });
-                }
-                this.boom();
-            };
-
-            const frame = (now) => {
-                // efface progressivement l'image précédente : traînées lumineuses
-                c.globalCompositeOperation = 'destination-out';
-                c.fillStyle = 'rgba(0,0,0,0.22)';
-                c.fillRect(0, 0, W(), H());
-                c.globalCompositeOperation = 'lighter';
-
-                if (now > next) { launch(); if (Math.random() < 0.35) launch(); next = now + 350 + Math.random() * 600; }
-
-                for (let i = rockets.length - 1; i >= 0; i--) {
-                    const r = rockets[i];
-                    r.x += r.vx; r.y += r.vy; r.vy += 0.12;
-                    c.fillStyle = `hsl(${r.hue},100%,75%)`;
-                    c.fillRect(r.x - 1.5, r.y - 1.5, 3, 3);
-                    if (r.y <= r.top || r.vy >= 0) { explode(r); rockets.splice(i, 1); }
-                }
-                for (let i = sparks.length - 1; i >= 0; i--) {
-                    const p = sparks[i];
-                    p.x += p.vx; p.y += p.vy; p.vx *= 0.985; p.vy = p.vy * 0.985 + 0.05; p.life -= p.decay;
-                    if (p.life <= 0) { sparks.splice(i, 1); continue; }
-                    c.fillStyle = `hsla(${p.hue},100%,${55 + p.life * 25}%,${p.life})`;
-                    c.beginPath(); c.arc(p.x, p.y, 2.2, 0, Math.PI * 2); c.fill();
-                }
-                k.raf = requestAnimationFrame(frame);
-            };
-            k.raf = requestAnimationFrame(frame);
-        },
-
-        // ---------- Son (Web Audio) : durée réglable, coupable à tout moment ----------
-        playSound() {
-            this.stopSound();
-            const AC = window.AudioContext || window.webkitAudioContext;
-            if (!AC) return;
-            const ctx = k.ctx = new AC();
-            ctx.resume?.();
-            const t0 = ctx.currentTime, dur = Math.min(30, Math.max(1, +this.s.duration || 5));
-            k.end = t0 + dur;
-
-            const master = k.master = ctx.createGain();
-            master.gain.setValueAtTime(0.8, t0);
-            master.gain.setValueAtTime(0.8, t0 + Math.max(0, dur - 1));
-            master.gain.linearRampToValueAtTime(0.0001, t0 + dur);
-            master.connect(ctx.destination);
-
-            // bruit blanc réutilisable (applaudissements, détonations)
-            const noise = k.noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
-            const d = noise.getChannelData(0);
-            for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-
-            // fanfare : do-mi-sol puis accord final
-            const note = (f, at, len, vol = 0.12) => {
-                ['sawtooth', 'square'].forEach(type => {
-                    const o = ctx.createOscillator(), g = ctx.createGain(), lp = ctx.createBiquadFilter();
-                    o.type = type; o.frequency.value = f; lp.type = 'lowpass'; lp.frequency.value = 2400;
-                    g.gain.setValueAtTime(0.0001, t0 + at);
-                    g.gain.exponentialRampToValueAtTime(vol, t0 + at + 0.03);
-                    g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + len);
-                    o.connect(lp).connect(g).connect(master);
-                    o.start(t0 + at); o.stop(t0 + at + len + 0.05);
-                });
-            };
-            [[523.25, 0], [659.25, 0.16], [783.99, 0.32]].forEach(([f, at]) => note(f, at, 0.2));
-            [523.25, 659.25, 783.99, 1046.5].forEach(f => note(f, 0.5, Math.max(0.3, Math.min(1.4, dur - 0.5)), 0.08));
-
-            // applaudissements : nombreux petits claquements filtrés jusqu'à la fin de la durée
-            for (let at = 0.4; at < dur; at += 0.012 + Math.random() * 0.03) {
-                const src = ctx.createBufferSource(), bp = ctx.createBiquadFilter(), g = ctx.createGain();
-                src.buffer = noise; bp.type = 'bandpass'; bp.frequency.value = 900 + Math.random() * 1800; bp.Q.value = 1.2;
-                g.gain.setValueAtTime(0.05 + Math.random() * 0.12, t0 + at);
-                g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.04);
-                src.connect(bp).connect(g).connect(master);
-                src.start(t0 + at, Math.random() * 0.9, 0.06);
-            }
-        },
-
-        // détonation à chaque explosion, seulement pendant la durée du son
-        boom() {
-            const ctx = k.ctx;
-            if (!ctx || !this.s.sound || ctx.state === 'closed' || ctx.currentTime > k.end - 0.3) return;
-            const t = ctx.currentTime, src = ctx.createBufferSource(), lp = ctx.createBiquadFilter(), g = ctx.createGain();
-            src.buffer = k.noise; lp.type = 'lowpass'; lp.frequency.value = 500;
-            g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.7);
-            src.connect(lp).connect(g).connect(k.master);
-            src.start(t, 0, 0.75);
-        },
-
-        stopSound() {
-            if (k.ctx && k.ctx.state !== 'closed') k.ctx.close();
-            k.ctx = null;
-        },
-    }; });
+@include('draws.partials.reveal-script')
 </script>
 @endscript
 

@@ -71,19 +71,27 @@ Route::middleware(['auth', 'permission:tools.qrcode'])->prefix('outils/qr-code')
     Route::get('/{qrCode}/svg', [QrCodeController::class, 'svg'])->name('svg');
     Route::get('/{qrCode}/imprimer', [QrCodeController::class, 'print'])->name('print');
 });
-// Tirages au sort Marketing : consultation draws.view, actions draws.manage (vérifié dans les composants)
+// Tirages au sort Marketing : consultation draws.view ; préparation draws.manage ; salle de tirage draws.run
+// (vérifiés dans les composants, le middleware de route ne couvrant pas les appels Livewire suivants)
 Route::middleware(['auth', 'permission:draws.view'])->prefix('marketing')->name('draws.')->group(function () {
     Volt::route('/lots', 'marketing.prizes.index')->name('prizes');
     Route::get('/lots/images/{prizeImage}', [DrawController::class, 'prizeImage'])->name('prize-image');
     Route::get('/tirages/lots/{drawPrize}/image', [DrawController::class, 'lotImage'])->name('lot-image');
 
-    Volt::route('/tirages', 'marketing.draws.index')->name('index');
-    Route::prefix('tirages/{draw}')->whereNumber('draw')->group(function () {
-        Volt::route('/', 'marketing.draws.show')->name('show');
+    // Cérémonies
+    Volt::route('/tirages', 'marketing.ceremonies.index')->name('index');
+    Route::prefix('tirages/{ceremony}')->whereNumber('ceremony')->group(function () {
+        Volt::route('/', 'marketing.ceremonies.show')->name('ceremony');
+        Volt::route('/salle', 'marketing.ceremonies.room')->name('room');
         Volt::route('/ecran', 'marketing.draws.screen')->name('screen');
-        Route::get('/eligibles.csv', [DrawController::class, 'eligibles'])->name('eligibles');
         Route::get('/gagnants.csv', [DrawController::class, 'winners'])->name('winners');
         Route::get('/pv.pdf', [DrawController::class, 'pv'])->name('pv');
+    });
+
+    // Listes d'éligibles (une par catégorie d'une cérémonie)
+    Route::prefix('tirages/listes/{draw}')->whereNumber('draw')->group(function () {
+        Volt::route('/', 'marketing.draws.show')->name('show');
+        Route::get('/eligibles.csv', [DrawController::class, 'eligibles'])->name('eligibles');
     });
 });
 Volt::route('/admin/exports','admin.exports.index')->name('admin.exports.index')->middleware(['auth', 'permission:admin.exports.view']);

@@ -1,44 +1,51 @@
 <?php
 
-use App\Models\Draw;
+use App\Models\DrawCeremony;
 use App\Support\DrawEngine;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 
 /**
- * Tableau d'honneur plein écran, à afficher en fin de cérémonie : gagnants
- * retenus par catégorie et par lot, numéro masqué (2537****542). Se met à jour
- * tout seul pendant le tirage.
+ * Tableau d'honneur d'une cérémonie (plein écran) : gagnants retenus par
+ * catégorie et par lot, numéro masqué (2537****542). Se met à jour tout seul
+ * pendant le tirage.
  */
 new #[Layout('layouts.screen')] class extends Component {
 
-    public Draw $draw;
+    public DrawCeremony $ceremony;
 
     public function boot(): void
     {
         abort_unless(auth()->user()?->can('draws.view'), 403);
     }
 
-    public function mount(Draw $draw): void
+    public function mount(DrawCeremony $ceremony): void
     {
-        abort_unless($draw->isDrawn(), 404);
-        $this->draw = $draw;
+        abort_unless($ceremony->hasStarted(), 404);
+        $this->ceremony = $ceremony;
     }
 
     public function with(): array
     {
-        $prizes = $this->draw->prizes()->with('winners')->get();
+        $draws = $this->ceremony->draws()->with(['category', 'prizes.winners'])->get();
 
-        return [
-            'groups' => $prizes->groupBy(fn ($p) => $p->category_name ?? 'Lots')->map(fn ($items) => [
-                'color'  => $items->first()->category_color ?? '#1B2F6E',
-                'prizes' => $items->map(fn ($p) => [
+        // Une ligne par catégorie ; un ancien tirage « toutes catégories » est regroupé par catégorie de lot
+        $groups = collect();
+        foreach ($draws as $d) {
+            foreach ($d->prizes as $p) {
+                $name = $d->prize_category_id ? $d->categoryName() : ($p->category_name ?? 'Lots');
+                $color = $d->prize_category_id ? $d->categoryColor() : ($p->category_color ?? '#1B2F6E');
+                $group = $groups->get($name, ['color' => $color, 'prizes' => collect()]);
+                $group['prizes']->push([
                     'name'    => $p->name,
                     'image'   => $p->imageUrl(),
                     'winners' => $p->winners->filter->isEffective()->map(fn ($w) => ['msisdn' => DrawEngine::mask($w->msisdn), 'name' => $w->name])->values(),
-                ]),
-            ]),
-        ];
+                ]);
+                $groups->put($name, $group);
+            }
+        }
+
+        return ['groups' => $groups];
     }
 };
 ?>
@@ -47,7 +54,7 @@ new #[Layout('layouts.screen')] class extends Component {
     <div style="display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:26px;">
         <div>
             <p style="font-size:13px; color:#FFC72C; letter-spacing:2px; text-transform:uppercase; font-weight:700;">D-Money · Tableau d'honneur</p>
-            <h1 style="font-size:30px; font-weight:800; margin-top:4px;">{{ $draw->name }}</h1>
+            <h1 style="font-size:30px; font-weight:800; margin-top:4px;">{{ $ceremony->name }}</h1>
         </div>
         <button onclick="document.documentElement.requestFullscreen?.()" style="background:rgba(255,255,255,.12); color:#fff; border:none; border-radius:8px; padding:8px 14px; font-size:12px; cursor:pointer;">Plein écran</button>
     </div>

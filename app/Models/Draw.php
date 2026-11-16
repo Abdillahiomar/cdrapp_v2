@@ -6,7 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-/** Campagne de tirage au sort Marketing (voir App\Support\DrawEngine) */
+/**
+ * Liste d'éligibles d'une catégorie de lots au sein d'une cérémonie (critères,
+ * liste figée, lots de cette catégorie). Voir DrawCeremony et App\Support\DrawEngine.
+ * prize_category_id NULL : ancien tirage repris tel quel (toutes catégories).
+ */
 class Draw extends Model
 {
     public const STATUSES = [
@@ -24,7 +28,7 @@ class Draw extends Model
     ];
 
     protected $fillable = [
-        'name', 'description', 'period_start', 'period_end', 'txn_indexes', 'min_txn_count', 'min_txn_amount',
+        'draw_ceremony_id', 'prize_category_id', 'name', 'description', 'period_start', 'period_end', 'txn_indexes', 'min_txn_count', 'min_txn_amount',
         'chance_mode', 'one_prize_per_client', 'exclude_employees', 'exclude_rds_lite', 'exclude_winners_days', 'blacklist',
         'status', 'error', 'funnel', 'eligible_count', 'ticket_count', 'eligible_hash', 'seed',
         'created_by', 'computed_by', 'drawn_by', 'closed_by', 'computed_at', 'drawn_at', 'closed_at',
@@ -43,6 +47,27 @@ class Draw extends Model
         'drawn_at'             => 'datetime',
         'closed_at'            => 'datetime',
     ];
+
+    public function ceremony(): BelongsTo
+    {
+        return $this->belongsTo(DrawCeremony::class, 'draw_ceremony_id');
+    }
+
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(PrizeCategory::class, 'prize_category_id');
+    }
+
+    /** « Platinum », ou « Toutes catégories » pour un ancien tirage */
+    public function categoryName(): string
+    {
+        return $this->category?->name ?? 'Toutes catégories';
+    }
+
+    public function categoryColor(): string
+    {
+        return $this->category?->color ?? '#1B2F6E';
+    }
 
     public function prizes(): HasMany
     {
