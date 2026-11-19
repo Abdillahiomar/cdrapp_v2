@@ -5,6 +5,8 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Liste d'éligibles d'une catégorie de lots au sein d'une cérémonie (critères,
@@ -28,7 +30,7 @@ class Draw extends Model
     ];
 
     protected $fillable = [
-        'draw_ceremony_id', 'prize_category_id', 'name', 'description', 'period_start', 'period_end', 'txn_indexes', 'min_txn_count', 'min_txn_amount',
+        'draw_ceremony_id', 'prize_category_id', 'name', 'description', 'period_start', 'period_end', 'txn_indexes', 'reason_indexes', 'min_txn_count', 'min_txn_amount',
         'chance_mode', 'one_prize_per_client', 'exclude_employees', 'exclude_rds_lite', 'exclude_winners_days', 'blacklist',
         'status', 'error', 'funnel', 'eligible_count', 'ticket_count', 'eligible_hash', 'seed',
         'created_by', 'computed_by', 'drawn_by', 'closed_by', 'computed_at', 'drawn_at', 'closed_at',
@@ -38,6 +40,7 @@ class Draw extends Model
         'period_start'         => 'date',
         'period_end'           => 'date',
         'txn_indexes'          => 'array',
+        'reason_indexes'       => 'array',
         'funnel'               => 'array',
         'min_txn_amount'       => 'decimal:2',
         'one_prize_per_client' => 'boolean',
@@ -105,6 +108,41 @@ class Draw extends Model
     public function isOpenForDrawing(): bool
     {
         return in_array($this->status, ['ready', 'drawing', 'drawn'], true);
+    }
+
+    /**
+     * Reasons retenus, groupés par type : [txn_index => [reason_index, …]].
+     * Un type absent garde tous ses reasons.
+     */
+    public function reasonsByType(): array
+    {
+        $reasons = array_map('intval', $this->reason_indexes ?? []);
+        if (!$reasons) {
+            return [];
+        }
+
+        return DB::table('reason_types')
+            ->whereIn('reason_index', $reasons)
+            ->whereIn('txn_index', array_map('strval', $this->txn_indexes ?? []))
+            ->get(['txn_index', 'reason_index'])
+            ->groupBy(fn ($r) => (int) $r->txn_index)
+            ->map(fn ($g) => $g->pluck('reason_index')->map(fn ($v) => (int) $v)->unique()->sort()->values()->all())
+            ->all();
+    }
+
+    /** Un libellé par type : « Merchant Payment (via Main Acc, via Sub Acc) », ou le nom seul s'il n'est pas restreint */
+    public function typeLabels(): Collection
+    {
+        $types   = DB::table('transaction_types')->whereIn('txn_index', array_map('intval', $this->txn_indexes ?? []))->pluck('txn_type_name', 'txn_index');
+        $reasons = DB::table('reason_types')->whereIn('reason_index', array_map('intval', $this->reason_indexes ?? []))->pluck('reason_name', 'reason_index');
+        $byType  = $this->reasonsByType();
+
+        return collect($this->txn_indexes ?? [])
+            ->map(fn ($i) => ($types[(int) $i] ?? $i) . (isset($byType[(int) $i])
+                ? ' (' . collect($byType[(int) $i])->map(fn ($r) => $reasons[$r] ?? $r)->implode(', ') . ')'
+                : ''))
+            ->sort()
+            ->values();
     }
 
     /** Numéros de la liste noire, au format des transactions (2537XXXXXXX) */

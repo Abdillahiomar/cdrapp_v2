@@ -17,7 +17,8 @@ use RuntimeException;
  * Tirages au sort Marketing.
  *
  * 1. computeEligibles() : clients (payeurs, type Customer) ayant des
- *    transactions terminées des types choisis sur la période, un client = une
+ *    transactions terminées des types choisis (restreints, le cas échéant, à
+ *    certains reasons : ex. paiement marchand via Main Acc et Sub Acc) sur la période, un client = une
  *    ligne (doublons supprimés), puis seuils et exclusions. La liste est figée
  *    dans draw_participants avec son empreinte SHA-256.
  * 2. drawOne() : tirage lot par lot, un gagnant par appel ; au dernier gagnant
@@ -66,11 +67,20 @@ class DrawEngine
 
         $start = $draw->period_start->format('Y-m-d') . ' 00:00:00';
         $end   = $draw->period_end->copy()->addDay()->format('Y-m-d') . ' 00:00:00';
-        $types = array_map('intval', $draw->txn_indexes);
-        $in    = implode(',', array_fill(0, count($types), '?'));
-        $f     = self::AMOUNT_FACTOR;
+        $f = self::AMOUNT_FACTOR;
 
-        DB::transaction(function () use ($draw, $userId, $start, $end, $types, $in, $f) {
+        // Types sans reason retenu : toutes leurs transactions ; les autres : seulement les reasons retenus
+        $byType   = $draw->reasonsByType();
+        $free     = array_values(array_diff(array_map('intval', $draw->txn_indexes), array_keys($byType)));
+        $reasons  = array_merge([], ...array_values($byType));
+        $marks    = fn (array $v) => implode(',', array_fill(0, count($v), '?'));
+        $typeSql  = implode(' OR ', array_filter([
+            $free    ? "txn_index IN ({$marks($free)})" : null,
+            $reasons ? "(txn_index IN ({$marks(array_keys($byType))}) AND reason_index IN ({$marks($reasons)}))" : null,
+        ]));
+        $typeArgs = array_merge($free, $reasons ? array_keys($byType) : [], $reasons);
+
+        DB::transaction(function () use ($draw, $userId, $start, $end, $typeSql, $typeArgs, $f) {
             DB::table('draw_participants')->where('draw_id', $draw->id)->delete();
 
             // Un client = une ligne : le GROUP BY supprime les doublons
@@ -84,9 +94,9 @@ class DrawEngine
                    AND status = 'Completed'
                    AND debit_party_type = 'Customer'
                    AND debit_party_identifier IS NOT NULL
-                   AND txn_index IN ($in)
+                   AND ({$typeSql})
                  GROUP BY debit_party_identifier
-            ", array_merge([$draw->id, $start, $end], $types));
+            ", array_merge([$draw->id, $start, $end], $typeArgs));
 
             $participants = fn () => DB::table('draw_participants')->where('draw_id', $draw->id);
 

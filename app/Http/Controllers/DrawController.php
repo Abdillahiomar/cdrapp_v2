@@ -66,13 +66,12 @@ class DrawController extends Controller
         $ceremony->load(['creator', 'drawer', 'closer']);
         $draws  = $ceremony->draws()->with(['category', 'creator', 'computer', 'prizes.winners.replaces', 'prizes.winners.invalidator'])->get();
         $engine = app(DrawEngine::class);
-        $types  = DB::table('transaction_types')->pluck('txn_type_name', 'txn_index');
 
         $pdf = Pdf::loadView('draws.pv', [
             'ceremony' => $ceremony,
             'draws'    => $draws,
             'images'   => $draws->flatMap->prizes->mapWithKeys(fn ($p) => [$p->id => $this->dataUri($p->image_path)]),
-            'types'    => $draws->mapWithKeys(fn ($d) => [$d->id => collect($d->txn_indexes ?? [])->map(fn ($i) => $types[$i] ?? $i)->sort()->values()]),
+            'types'    => $draws->mapWithKeys(fn ($d) => [$d->id => $d->typeLabels()]),
             'verify'   => $engine->verifyCeremony($ceremony),
         ])->setPaper('a4');
 

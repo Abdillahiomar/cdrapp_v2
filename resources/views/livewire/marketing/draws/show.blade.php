@@ -69,7 +69,8 @@ new class extends Component {
             'period_start'         => $d->period_start->format('Y-m-d'),
             'period_end'           => $d->period_end->format('Y-m-d'),
             'txn_indexes'          => array_map('strval', $d->txn_indexes ?? []),
-            'min_txn_count'        => $d->min_txn_count,
+            'reason_indexes'       => array_map('strval', $d->reason_indexes ?? []),
+            'min_txn_count'      => $d->min_txn_count,
             'min_txn_amount'       => (float) $d->min_txn_amount,
             'chance_mode'          => $d->chance_mode,
             'exclude_employees'    => $d->exclude_employees,
@@ -137,11 +138,15 @@ new class extends Component {
             'form.min_txn_count.min'         => 'Au moins 1 transaction.',
         ]);
 
+        $types   = array_values(array_map('intval', $this->form['txn_indexes']));
+        $reasons = $this->keptReasons($types);
+
         $this->draw->update([
             'description'          => trim($this->form['description']) ?: null,
             'period_start'         => $this->form['period_start'],
             'period_end'           => $this->form['period_end'],
-            'txn_indexes'          => array_values(array_map('intval', $this->form['txn_indexes'])),
+            'txn_indexes'          => $types,
+            'reason_indexes'       => $reasons ?: null,
             'min_txn_count'        => (int) $this->form['min_txn_count'],
             'min_txn_amount'       => (float) $this->form['min_txn_amount'],
             'chance_mode'          => $this->form['chance_mode'],
@@ -152,11 +157,45 @@ new class extends Component {
             'error'                => null,
         ]);
 
+        $this->form['reason_indexes'] = array_map('strval', $reasons);
+
         if ($flash) {
             session()->flash('success', 'Critères enregistrés.');
         }
 
         return true;
+    }
+
+    /** Reasons cochés qui appartiennent bien à un type coché */
+    private function keptReasons(array $types): array
+    {
+        $checked = array_map('intval', $this->form['reason_indexes'] ?? []);
+
+        return $checked && $types
+            ? DB::table('reason_types')
+                ->whereIn('reason_index', $checked)
+                ->whereIn('txn_index', array_map('strval', $types))
+                ->orderBy('reason_index')
+                ->distinct()
+                ->pluck('reason_index')
+                ->map(fn ($v) => (int) $v)
+                ->all()
+            : [];
+    }
+
+    /** Type décoché : ses reasons sont retirés */
+    public function updatedFormTxnIndexes(): void
+    {
+        $this->form['reason_indexes'] = array_map('strval', $this->keptReasons(array_map('intval', $this->form['txn_indexes'] ?? [])));
+    }
+
+    /** Coche (ou décoche) tous les reasons d'un type */
+    public function toggleTypeReasons(int $txnIndex, bool $all): void
+    {
+        $ofType  = DB::table('reason_types')->where('txn_index', (string) $txnIndex)->pluck('reason_index')->map(fn ($v) => (string) $v)->all();
+        $current = array_values(array_diff($this->form['reason_indexes'] ?? [], $ofType));
+
+        $this->form['reason_indexes'] = $all ? array_values(array_unique(array_merge($current, $ofType))) : $current;
     }
 
     // ── Étape 2 : lots (choisis dans le catalogue) ────────────────────────
@@ -418,7 +457,16 @@ new class extends Component {
 
         return [
             'types'        => $types,
-            'typeNames'    => $allTypes->whereIn('txn_index', $selected)->pluck('txn_type_name'),
+            'typeLabels'   => $draw->typeLabels(),
+            // Reasons proposés pour les types cochés, regroupés par type
+            'reasonGroups' => $selected
+                ? DB::table('reason_types')->whereIn('txn_index', array_map('strval', $selected))
+                    ->orderBy('reason_name')->get(['txn_index', 'reason_index', 'reason_name'])
+                    ->unique('reason_index')
+                    ->groupBy(fn ($r) => (int) $r->txn_index)
+                    ->sortBy(fn ($g, $i) => $allTypes->firstWhere('txn_index', $i)?->txn_type_name)
+                    ->map(fn ($g, $i) => ['name' => $allTypes->firstWhere('txn_index', $i)?->txn_type_name ?? $i, 'reasons' => $g->values()])
+                : collect(),
             'prizes'       => $prizes,
             'lotsTotal'    => $prizes->sum('quantity'),
             'subsTotal'    => $prizes->sum('substitutes'),
@@ -536,16 +584,44 @@ new class extends Component {
                         <div style="border:1px solid #e5e7eb; border-radius:7px; max-height:180px; overflow-y:auto; padding:6px 10px;">
                             @foreach($types as $t)
                                 <label wire:key="type-{{ $t->txn_index }}" style="display:flex; align-items:center; gap:8px; font-size:12px; color:#374151; padding:3px 0;">
-                                    <input type="checkbox" wire:model="form.txn_indexes" value="{{ $t->txn_index }}"> {{ $t->txn_type_name }}
+                                    <input type="checkbox" wire:model.live="form.txn_indexes" value="{{ $t->txn_index }}"> {{ $t->txn_type_name }}
                                 </label>
                             @endforeach
                         </div>
                     @else
-                        <p style="font-size:12px; color:#111827; margin:0;">{{ $typeNames->implode(', ') ?: '—' }}</p>
+                        <p style="font-size:12px; color:#111827; margin:0;">{{ $typeLabels->implode(', ') ?: '—' }}</p>
                     @endif
                     @error('form.txn_indexes') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
                     <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">Transactions terminées, payées par un client (compte Customer débité).</p>
                 </div>
+                @if($editable && $reasonGroups->isNotEmpty())
+                    <div>
+                        <label style="{{ $labelStyle }}">Reasons retenus ({{ count($form['reason_indexes'] ?? []) }} coché(s))</label>
+                        <div style="border:1px solid #e5e7eb; border-radius:7px; max-height:240px; overflow-y:auto; padding:6px 10px;">
+                            @foreach($reasonGroups as $txnIndex => $group)
+                                @php $nbChecked = $group['reasons']->whereIn('reason_index', array_map('intval', $form['reason_indexes'] ?? []))->count(); @endphp
+                                <div wire:key="reasons-{{ $txnIndex }}" style="padding:4px 0; {{ $loop->last ? '' : 'border-bottom:1px solid #f3f4f6;' }}">
+                                    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:2px;">
+                                        <span style="font-size:12px; font-weight:600; color:#111827;">
+                                            {{ $group['name'] }}
+                                            <span style="font-weight:400; color:{{ $nbChecked ? '#1B2F6E' : '#9ca3af' }};">— {{ $nbChecked ? $nbChecked . ' retenu(s)' : 'aucun coché : tous les reasons' }}</span>
+                                        </span>
+                                        <span style="font-size:11px; white-space:nowrap;">
+                                            <button type="button" wire:click="toggleTypeReasons({{ $txnIndex }}, true)" style="background:none; border:none; color:#1B2F6E; cursor:pointer; padding:0;">Tout</button>
+                                            · <button type="button" wire:click="toggleTypeReasons({{ $txnIndex }}, false)" style="background:none; border:none; color:#1B2F6E; cursor:pointer; padding:0;">Aucun</button>
+                                        </span>
+                                    </div>
+                                    @foreach($group['reasons'] as $r)
+                                        <label wire:key="reason-{{ $r->reason_index }}" style="display:flex; align-items:center; gap:8px; font-size:12px; color:#374151; padding:2px 0 2px 10px;">
+                                            <input type="checkbox" wire:model.live="form.reason_indexes" value="{{ $r->reason_index }}"> {{ $r->reason_name }}
+                                        </label>
+                                    @endforeach
+                                </div>
+                            @endforeach
+                        </div>
+                        <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">Cochez seulement les reasons à prendre (ex. paiement marchand via Main Acc et via Sub Acc). Un type sans reason coché garde toutes ses transactions.</p>
+                    </div>
+                @endif
             </div>
 
             {{-- Colonne droite : options du tirage et exclusions --}}
