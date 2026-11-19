@@ -43,6 +43,11 @@ new class extends Component {
     public int   $airtime_nb_transactions = 0;
     public float $airtime_ticket_moyen    = 0;
 
+    // Mode rapport : page ouverte par le générateur du PDF envoyé par email (route signée reports.revenue)
+    #[\Livewire\Attributes\Locked]
+    public bool $report = false;
+    protected ?array $reportDash = null;
+
     public function mount()
     {
         $this->date_debut = Carbon::now()->subDays(7)->format('Y-m-d');
@@ -50,6 +55,18 @@ new class extends Component {
 
         $this->date_debut_airtime = Carbon::now()->subDays(7)->format('Y-m-d');
         $this->date_fin_airtime   = Carbon::now()->format('Y-m-d');
+
+        if (request()->routeIs('reports.revenue')) {
+            $from = (string) request()->query('debut');
+            $to   = (string) request()->query('fin');
+            abort_unless(preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) && $from <= $to, 404);
+
+            $this->report     = true;
+            $this->date_debut = $this->date_debut_airtime = $from;
+            $this->date_fin   = $this->date_fin_airtime   = $to;
+            $this->search();
+            $this->searchAirtime();
+        }
     }
 
     private function reasonIndexesFor(string $needle): array
@@ -116,9 +133,12 @@ if (!empty($idxMerchant)) {
         $this->searched = true;
 
         $this->top_payers = $dash['top_payers'];
+        $this->reportDash = $dash;
 
-        // Envoi des données aux graphiques JS
-        $this->dispatch('dashboard-updated', dash: $dash);
+        // Envoi des données aux graphiques JS (en mode rapport, ils sont dessinés dès l'affichage)
+        if (!$this->report) {
+            $this->dispatch('dashboard-updated', dash: $dash);
+        }
     }
 
     /** Changement du nombre de payeurs : seul le Top payeurs est recalculé */
@@ -195,21 +215,39 @@ if (!empty($idxMerchant)) {
 
         $this->searched_airtime = true;
 
-        $this->dispatch('airtime-updated',
-            serie:        $this->airtime_serie,
-            repartition:  $this->airtime_repartition,
-        );
+        if (!$this->report) {
+            $this->dispatch('airtime-updated',
+                serie:        $this->airtime_serie,
+                repartition:  $this->airtime_repartition,
+            );
+        }
     }
 
     public function with(): array
     {
-        return [];
+        // Données des graphiques dessinés dès l'affichage en mode rapport
+        return ['reportDash' => $this->report ? $this->reportDash : null];
     }
 };
 ?>
 <div>
 <div style="padding:24px;">
 
+    @if($report)
+        {{-- EN-TÊTE DU RAPPORT (PDF envoyé par email) --}}
+        <div style="display:flex; align-items:center; gap:16px; background:#1B2F6E; color:#fff; border-radius:12px; padding:16px 20px; margin-bottom:20px;">
+            <div style="background:#fff; border-radius:10px; padding:4px; width:56px; height:56px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                <img src="{{ asset('images/qr-logo.png') }}" alt="D-Money" onerror="this.parentElement.style.display='none'" style="max-width:100%; max-height:100%; object-fit:contain;">
+            </div>
+            <div style="flex:1;">
+                <p style="font-size:20px; font-weight:800;">Tableau de bord des transactions — {{ ucfirst(\Carbon\Carbon::parse($date_fin)->locale('fr')->translatedFormat('F Y')) }}</p>
+                <p style="font-size:12px; color:rgba(255,255,255,.75); margin-top:4px;">
+                    Du {{ \Carbon\Carbon::parse($date_debut)->format('d/m/Y') }} au {{ \Carbon\Carbon::parse($date_fin)->format('d/m/Y') }}
+                    · généré le {{ now()->format('d/m/Y à H:i') }}
+                </p>
+            </div>
+        </div>
+    @else
     {{-- FILTRES --}}
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:20px; margin-bottom:20px;">
         <p style="font-size:14px; font-weight:700; color:#111827; margin-bottom:16px;">
@@ -240,6 +278,7 @@ if (!empty($idxMerchant)) {
         </div>
         <style>@keyframes spin { from{transform:rotate(0)} to{transform:rotate(360deg)} }</style>
     </div>
+    @endif
 
     @if(!$searched)
         <div style="text-align:center; padding:60px 20px; background:#fff; border:1px solid #e5e7eb; border-radius:10px;">
@@ -398,7 +437,7 @@ if (!empty($idxMerchant)) {
                     <p style="{{ $title }}">Top {{ $top_limit }} des payeurs de frais</p>
                     <p style="{{ $sub }}">Comptes (débiteurs) qui ont payé le plus de frais sur la période</p>
                 </div>
-                <div style="display:flex; align-items:center; gap:8px;">
+                <div style="display:{{ $report ? 'none' : 'flex' }}; align-items:center; gap:8px;">
                     <label style="font-size:11px; color:#6b7280;">Afficher</label>
                     <select wire:model.live="top_limit"
                             style="border:1px solid #d1d5db; border-radius:7px; padding:6px 10px; font-size:12px; color:#111827; outline:none; background:#fff;">
@@ -418,7 +457,7 @@ if (!empty($idxMerchant)) {
             @else
                 <div style="{{ $grid2 }} align-items:start;">
                     <div wire:ignore style="position:relative; height:300px;"><canvas id="chartTopPayers"></canvas></div>
-                    <div style="overflow:auto; max-height:{{ max(300, count($top_payers) * 28) }}px;">
+                    <div style="{{ $report ? '' : 'overflow:auto; max-height:' . max(300, count($top_payers) * 28) . 'px;' }}">
                         <table style="width:100%; border-collapse:collapse; font-size:12px;">
                             <thead>
                                 <tr style="background:#F7F8FC;">
@@ -459,7 +498,7 @@ if (!empty($idxMerchant)) {
         <p style="font-size:14px; font-weight:700; color:#111827; margin-bottom:16px;">
             Suivi Airtime (Self Top Up, Third Top Up, Bulk Buy Airtime, Purchase Airtime Package)
         </p>
-        <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap;">
+        <div style="display:{{ $report ? 'none' : 'flex' }}; align-items:flex-end; gap:12px; flex-wrap:wrap;">
             <div>
                 <label style="font-size:11px; color:#6b7280; display:block; margin-bottom:4px;">Date début</label>
                 <input type="date" wire:model="date_debut_airtime"
@@ -879,6 +918,18 @@ if (!empty($idxMerchant)) {
             renderAirtime(payload.serie || [], payload.repartition || []);
         });
     });
+
+    @if($report)
+    // Mode rapport : graphiques dessinés tout de suite, sans animation, puis signal au générateur du PDF
+    const reportData = { dash: @js($reportDash ?? []), serie: @js($airtime_serie), repartition: @js($airtime_repartition) };
+    (function renderReport() {
+        if (typeof Chart === 'undefined') { setTimeout(renderReport, 100); return; }
+        Chart.defaults.animation = false;
+        renderDashboard(reportData.dash);
+        renderAirtime(reportData.serie, reportData.repartition);
+        requestAnimationFrame(() => requestAnimationFrame(() => { window.__reportReady = true; }));
+    })();
+    @endif
 </script>
 @endscript
 </div>

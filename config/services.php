@@ -35,4 +35,15 @@ return [
         ],
     ],
 
+    // Capture PDF des pages (rapport du tableau de bord envoyé par email)
+    'browsershot' => [
+        // Adresse à laquelle le serveur joint l'application elle-même (par défaut APP_URL)
+        'base_url'     => env('BROWSERSHOT_BASE_URL'),
+        'node_binary'  => env('BROWSERSHOT_NODE_BINARY'),
+        'npm_binary'   => env('BROWSERSHOT_NPM_BINARY'),
+        'chrome_path'  => env('BROWSERSHOT_CHROME_PATH'),
+        'node_modules' => env('BROWSERSHOT_NODE_MODULES'),
+        'no_sandbox'   => (bool) env('BROWSERSHOT_NO_SANDBOX', false),
+    ],
+
 ];

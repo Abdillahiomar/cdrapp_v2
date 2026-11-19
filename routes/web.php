@@ -21,6 +21,12 @@ Volt::route('/summary', 'transactions.summary')->name('transactions.summary')->m
 Volt::route('/manager_dashboard', 'dashboard.manager_dashboard')->name('dashboard.manager')->middleware(['auth', 'permission:dashboard.admin']);
 Volt::route('/dashboard', 'dashboard.index')->name('dashboard.index');
 Volt::route('/tableau_de_bord_revenue', 'dashboard.show')->name('dashboard.show');
+// Même page en mode rapport, ouverte par le navigateur sans affichage qui fabrique le PDF envoyé par email
+// (adresse signée et limitée dans le temps, générée par App\Support\RevenueReport)
+Volt::route('/rapports/tableau-de-bord-revenus', 'dashboard.show')->name('reports.revenue')
+    ->middleware(['signed:relative', \App\Http\Middleware\UseReportLayout::class]);
+Volt::route('/admin/rapports-email', 'admin.reports.revenue-email')->name('reports.revenue-email')
+    ->middleware(['auth', 'permission:reports.email.manage']);
 Volt::route('/reporting/transactions', 'dashboard.transactions-dashboard')->name('reporting.transactions');
 
 Volt::route('/fraudes', 'fraudes.aml')->name('aml.index')->middleware('auth');
