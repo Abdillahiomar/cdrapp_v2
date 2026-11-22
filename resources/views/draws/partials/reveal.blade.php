@@ -15,7 +15,12 @@
              :style="{ background: s.bg }"
              style="position:fixed; inset:0; z-index:998; overflow-y:auto; background:#0F1D47;">
 
-            <canvas x-ref="sky" style="position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:0;"></canvas>
+            {{-- Halos Glass UI par-dessus la couleur de fond choisie --}}
+            <div style="position:fixed; inset:0; pointer-events:none; z-index:0;
+                        background:radial-gradient(900px 560px at 85% -10%, rgba(29,60,105,.85), transparent 60%),
+                                   radial-gradient(700px 500px at -10% 110%, rgba(60,110,190,.28), transparent 60%),
+                                   radial-gradient(420px 320px at 50% 8%, rgba(245,196,0,.14), transparent 70%);"></div>
+            <canvas x-ref="sky"style="position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:0;"></canvas>
 
             {{-- Boutons son / réglages --}}
             <div style="position:fixed; top:14px; right:16px; z-index:3; display:flex; gap:8px;">
@@ -58,36 +63,49 @@
                     </div>
                 </div>
 
-                <p style="margin:16px 0 22px; background:{{ $revealPrize->category_color ?? '#1B2F6E' }}; color:#fff; font-size:clamp(14px,1.8vw,20px); font-weight:800; letter-spacing:4px; text-transform:uppercase; padding:8px 26px; border-radius:999px; box-shadow:0 0 0 3px rgba(255,255,255,.35);">
-                    {{ $revealPrize->category_name ?? 'Lot' }}
+                @php $catColor = $revealPrize->category_color ?? '#1B2F6E'; @endphp
+                <p style="margin:16px 0 22px; display:inline-flex; align-items:center; gap:10px; color:#fff; font-size:clamp(14px,1.8vw,20px); font-weight:800; letter-spacing:4px; text-transform:uppercase; padding:9px 26px; border-radius:999px;
+                          background:color-mix(in srgb, {{ $catColor }} 30%, rgba(255,255,255,.06)); border:1px solid color-mix(in srgb, {{ $catColor }} 70%, transparent);
+                          box-shadow:0 0 30px color-mix(in srgb, {{ $catColor }} 35%, transparent); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);">
+                    <span style="width:10px; height:10px; border-radius:50%; background:{{ $catColor }}; box-shadow:0 0 12px {{ $catColor }};"></span>
+                    Pack {{ $revealPrize->category_name ?? 'Lot' }}
                 </p>
 
-                {{-- Lot + gagnant --}}
-                <div style="width:min(760px,100%); background:#fff; border-radius:20px; box-shadow:0 30px 80px rgba(0,0,0,.45); padding:24px 28px 22px;">
+                {{-- Lot + gagnant (Glass UI) --}}
+                <div style="position:relative; width:min(780px,100%); color:#fff; text-align:center; border-radius:24px; padding:24px 28px 22px;
+                            background:linear-gradient(150deg, rgba(255,255,255,.13), rgba(255,255,255,.04)); border:1px solid rgba(255,255,255,.2);
+                            box-shadow:0 30px 80px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.18);
+                            backdrop-filter:blur(20px) saturate(140%); -webkit-backdrop-filter:blur(20px) saturate(140%);">
                     @if($revealPrize->imageUrl())
-                        <img src="{{ $revealPrize->imageUrl() }}" alt="" style="max-width:100%; max-height:34vh; object-fit:contain; display:block; margin:0 auto 14px;">
+                        <div style="border-radius:18px; padding:12px; margin:0 auto 16px; max-width:100%; display:inline-block;
+                                    background:radial-gradient(circle at 50% 40%, rgba(245,196,0,.22), transparent 65%), rgba(255,255,255,.92); box-shadow:0 16px 40px rgba(0,0,0,.35);">
+                            <img src="{{ $revealPrize->imageUrl() }}" alt="" style="max-width:100%; max-height:32vh; object-fit:contain; display:block;">
+                        </div>
                     @endif
-                    <p style="font-size:clamp(20px,2.6vw,30px); font-weight:800; color:#111827; margin:0;">🎁 {{ $revealPrize->name }}</p>
+                    <p style="font-size:clamp(20px,2.6vw,30px); font-weight:900; margin:0; letter-spacing:-.3px;">🎁 {{ $revealPrize->name }}</p>
                     @if($reveal->kind === 'extra' || $reveal->promoted_at)
-                        <p style="font-size:12px; color:#92400E; margin:4px 0 0;">Remplacement d'un gagnant écarté</p>
+                        <p style="font-size:12px; color:#FFE27A; margin:6px 0 0;">Remplacement d'un gagnant écarté</p>
                     @endif
 
-                    <div style="margin:20px 0 6px; padding:18px; border-radius:14px; background:#F7F8FC;">
-                        <p style="font-size:13px; color:#6b7280; margin:0 0 6px; text-transform:uppercase; letter-spacing:2px;">Gagnant</p>
-                        <p x-show="rolling" style="font-size:clamp(32px,4.4vw,52px); font-weight:800; font-family:monospace; color:#1B2F6E; margin:0; letter-spacing:3px;" x-text="roll"></p>
+                    <div style="margin:20px 0 6px; padding:20px 18px; border-radius:18px; position:relative; overflow:hidden;"
+                         :style="rolling
+                            ? { background: 'rgba(7,21,48,.55)', border: '1px solid rgba(255,255,255,.14)', boxShadow: 'inset 0 0 40px rgba(0,0,0,.35)' }
+                            : { background: 'linear-gradient(150deg, rgba(245,196,0,.22), rgba(245,196,0,.05) 50%, rgba(255,255,255,.04))', border: '1px solid rgba(245,196,0,.5)', boxShadow: '0 0 0 1px rgba(245,196,0,.15), 0 24px 60px rgba(245,196,0,.18)' }">
+                        <p style="font-size:12px; font-weight:800; color:#F5C400; margin:0 0 8px; text-transform:uppercase; letter-spacing:3px;" x-text="rolling ? 'Tirage en cours…' : 'Gagnant'"></p>
+                        <p x-show="rolling" style="font-size:clamp(32px,4.4vw,52px); font-weight:800; font-family:ui-monospace,Consolas,monospace; color:#fff; margin:0; letter-spacing:4px;" x-text="roll"></p>
                         <div x-show="!rolling" x-cloak x-transition.scale.90.opacity.duration.500ms>
-                            <p style="font-size:clamp(28px,4vw,46px); font-weight:900; color:#00843D; margin:0;">🎉 {{ $reveal->name ?? '—' }}</p>
-                            <p style="font-size:clamp(24px,3.2vw,36px); font-weight:700; font-family:monospace; color:#111827; margin:8px 0 0; letter-spacing:2px;"
+                            <p style="font-size:clamp(28px,4vw,46px); font-weight:900; color:#fff; margin:0; letter-spacing:-.5px; text-shadow:0 4px 30px rgba(245,196,0,.35);">🎉 {{ $reveal->name ?? '—' }}</p>
+                            <p style="font-size:clamp(24px,3.2vw,36px); font-weight:800; font-family:ui-monospace,Consolas,monospace; color:#F5C400; margin:10px 0 0; letter-spacing:3px;"
                                x-text="full ? @js(\App\Support\DrawEngine::display($reveal->msisdn)) : @js(\App\Support\DrawEngine::mask($reveal->msisdn))"></p>
                         </div>
                     </div>
 
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px; gap:10px; flex-wrap:wrap;">
-                        <label style="font-size:11px; color:#9ca3af; display:flex; align-items:center; gap:6px;">
+                        <label style="font-size:11.5px; color:rgba(255,255,255,.6); display:flex; align-items:center; gap:6px;">
                             <input type="checkbox" x-model="full"> Afficher le numéro complet
                         </label>
                         <button wire:click="closeReveal" :disabled="rolling"
-                                style="background:#1B2F6E; color:#fff; font-size:15px; font-weight:700; padding:11px 32px; border-radius:10px; border:none; cursor:pointer;"
+                                style="background:linear-gradient(180deg,#FFD83A,#F5C400); color:#10264B; font-size:15px; font-weight:900; letter-spacing:1px; padding:12px 34px; border-radius:12px; border:none; cursor:pointer; box-shadow:0 10px 24px rgba(245,196,0,.32), inset 0 1px 0 rgba(255,255,255,.55);"
                                 :style="rolling ? { opacity: '.4', cursor: 'wait' } : {}">Fermer</button>
                     </div>
                 </div>

@@ -3,6 +3,7 @@
 use App\Models\DrawCeremony;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
@@ -10,7 +11,7 @@ use Livewire\WithPagination;
  * Tirages au sort Marketing : liste des cérémonies et création.
  * Consultation : draws.view ; création et préparation : draws.manage.
  */
-new class extends Component {
+new #[Layout('layouts.tombola')] class extends Component {
     use WithPagination;
 
     public string $search       = '';
@@ -88,46 +89,42 @@ new class extends Component {
     }
 };
 ?>
-<div style="padding:24px;">
+<div>
+<x-tombola.shell title="Tirages au sort" active="index">
+<div class="tg-page">
 
 @php
-    $inputStyle = 'border:1px solid #d1d5db; border-radius:7px; padding:9px 12px; font-size:13px; color:#111827; outline:none; background:#fff; width:100%; box-sizing:border-box;';
-    $labelStyle = 'font-size:11px; color:#6b7280; display:block; margin-bottom:4px; font-weight:600;';
-    $fmt        = fn ($n) => number_format((float) $n, 0, ',', ' ');
+    $fmt = fn ($n) => number_format((float) $n, 0, ',', ' ');
 @endphp
 
-    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; gap:12px; flex-wrap:wrap;">
-        <div>
-            <h2 style="font-size:16px; font-weight:700; color:#111827; margin:0 0 4px;">Tirages au sort</h2>
-            <p style="font-size:12px; color:#9ca3af; margin:0;">Cérémonies Marketing : une liste d'éligibles préparée à l'avance par catégorie de lots, puis tirage lot par lot dans la salle de tirage.</p>
-        </div>
+    <div class="tg-toolbar">
+        <p class="tg-muted" style="max-width:640px;">Une liste d'éligibles préparée à l'avance par catégorie de lots, puis tirage lot par lot dans la salle de tirage.</p>
         @if($canManage)
-            <button wire:click="create"
-                    style="background:#1B2F6E; color:#fff; font-size:13px; font-weight:600; padding:9px 18px; border-radius:8px; border:none; cursor:pointer;">
-                + Nouvelle cérémonie
-            </button>
+            <button wire:click="create" class="tg-btn tg-btn-shine">+ Nouvelle cérémonie</button>
         @endif
     </div>
 
-    {{-- KPIs par statut --}}
-    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; margin-bottom:16px;">
-        @foreach(\App\Models\DrawCeremony::STATUSES as $key => [$label, $fg, $bg])
+    {{-- KPIs par statut (cliquables : filtre) --}}
+    <div class="tg-stats">
+        @foreach(\App\Models\DrawCeremony::STATUSES as $key => [$label])
             <button wire:click="$set('filterStatus', '{{ $filterStatus === $key ? '' : $key }}')"
-                    style="text-align:left; background:#fff; border:1px solid {{ $filterStatus === $key ? $fg : '#e5e7eb' }}; border-radius:10px; padding:14px 16px; border-top:3px solid {{ $fg }}; cursor:pointer;">
-                <p style="font-size:11px; color:#6b7280; margin:0 0 6px;">{{ $label }}</p>
-                <p style="font-size:20px; font-weight:700; color:#111827; margin:0;">{{ $counts[$key] ?? 0 }}</p>
+                    class="tg-glass tg-stat {{ $key === 'in_progress' ? 'tg-stat-accent' : '' }} {{ $filterStatus === $key ? 'is-active' : '' }}">
+                <span class="tg-badge tg-s-{{ $key }}" style="margin-bottom:12px;">{{ $label }}</span>
+                <p class="tg-stat-value">{{ $counts[$key] ?? 0 }}</p>
+                <p class="tg-stat-label">cérémonie(s)</p>
             </button>
         @endforeach
     </div>
 
-    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; margin-bottom:16px; display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+    {{-- FILTRES --}}
+    <div class="tg-glass tg-pad" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
         <div style="flex:1; min-width:220px;">
-            <label style="{{ $labelStyle }}">Rechercher</label>
-            <input type="text" wire:model.live.debounce.300ms="search" placeholder="Nom de la cérémonie…" style="{{ $inputStyle }}">
+            <label class="tg-label">Rechercher</label>
+            <input type="text" wire:model.live.debounce.300ms="search" placeholder="Nom de la cérémonie…" class="tg-input">
         </div>
-        <div>
-            <label style="{{ $labelStyle }}">Statut</label>
-            <select wire:model.live="filterStatus" style="{{ $inputStyle }} width:auto;">
+        <div style="min-width:180px;">
+            <label class="tg-label">Statut</label>
+            <select wire:model.live="filterStatus" class="tg-input">
                 <option value="">Tous</option>
                 @foreach(\App\Models\DrawCeremony::STATUSES as $key => [$label])
                     <option value="{{ $key }}">{{ $label }}</option>
@@ -136,89 +133,91 @@ new class extends Component {
         </div>
     </div>
 
-    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden;">
+    {{-- LISTE --}}
+    <div class="tg-glass" style="overflow:hidden;">
         <div style="overflow-x:auto;">
-            <table style="width:100%; border-collapse:collapse; font-size:12px;">
+            <table class="tg-table">
                 <thead>
-                    <tr style="background:#F7F8FC;">
+                    <tr>
                         @foreach(['Cérémonie', 'Date', 'Statut', 'Catégories', 'Éligibles', 'Lots', 'Gagnants', 'Créée par', ''] as $th)
-                            <th style="padding:10px 16px; text-align:{{ in_array($th, ['Éligibles', 'Lots', 'Gagnants']) ? 'right' : 'left' }}; color:#6b7280; font-weight:500; border-bottom:1px solid #e5e7eb; white-space:nowrap;">{{ $th }}</th>
+                            <th class="{{ in_array($th, ['Éligibles', 'Lots', 'Gagnants']) ? 'num' : '' }}">{{ $th }}</th>
                         @endforeach
                     </tr>
                 </thead>
                 <tbody>
                     @forelse($ceremonies as $ceremony)
-                        @php [$sLabel, $sFg, $sBg] = $ceremony->statusLabel(); @endphp
-                        <tr wire:key="ceremony-{{ $ceremony->id }}" style="border-bottom:1px solid #f3f4f6;">
-                            <td style="padding:10px 16px;">
-                                <a href="{{ route('draws.ceremony', $ceremony) }}" wire:navigate style="color:#1B2F6E; font-weight:600; text-decoration:none;">{{ $ceremony->name }}</a>
+                        <tr wire:key="ceremony-{{ $ceremony->id }}">
+                            <td style="min-width:220px;">
+                                <a href="{{ route('draws.ceremony', $ceremony) }}" wire:navigate class="tg-strong" style="text-decoration:none; font-size:13.5px;">{{ $ceremony->name }}</a>
                                 @if($ceremony->description)
-                                    <p style="font-size:11px; color:#9ca3af; margin:2px 0 0;">{{ \Illuminate\Support\Str::limit($ceremony->description, 80) }}</p>
+                                    <p class="tg-muted" style="font-size:11px; margin-top:2px;">{{ \Illuminate\Support\Str::limit($ceremony->description, 80) }}</p>
                                 @endif
                             </td>
-                            <td style="padding:10px 16px; color:#374151; white-space:nowrap;">{{ $ceremony->ceremony_date?->format('d/m/Y') ?? '—' }}</td>
-                            <td style="padding:10px 16px;">
-                                <span style="display:inline-block; padding:3px 10px; border-radius:10px; font-size:11px; font-weight:600; color:{{ $sFg }}; background:{{ $sBg }}; white-space:nowrap;">{{ $sLabel }}</span>
+                            <td style="white-space:nowrap;">{{ $ceremony->ceremony_date?->format('d/m/Y') ?? '—' }}</td>
+                            <td><span class="tg-badge tg-s-{{ $ceremony->status }}">{{ $ceremony->statusLabel()[0] }}</span></td>
+                            <td>
+                                <div style="display:flex; gap:5px; flex-wrap:wrap;">
+                                    @forelse($ceremony->draws as $d)
+                                        <span class="tg-cat" style="--c:{{ $d->categoryColor() }}; font-size:10px; padding:3px 9px;">{{ $d->categoryName() }}</span>
+                                    @empty
+                                        <span class="tg-muted">—</span>
+                                    @endforelse
+                                </div>
                             </td>
-                            <td style="padding:10px 16px;">
-                                @forelse($ceremony->draws as $d)
-                                    <span style="display:inline-block; margin:1px 0; padding:2px 8px; border-radius:8px; font-size:10px; font-weight:700; color:#fff; background:{{ $d->categoryColor() }};">{{ $d->categoryName() }}</span>
-                                @empty
-                                    <span style="color:#9ca3af;">—</span>
-                                @endforelse
-                            </td>
-                            <td style="padding:10px 16px; text-align:right; color:#111827;">{{ $ceremony->draws->whereNotNull('eligible_count')->isNotEmpty() ? $fmt($ceremony->draws->sum('eligible_count')) : '—' }}</td>
-                            <td style="padding:10px 16px; text-align:right; color:#111827;">{{ (int) $ceremony->lots_total }}</td>
-                            <td style="padding:10px 16px; text-align:right; color:#111827; font-weight:700;">{{ $ceremony->hasStarted() ? ($effective[$ceremony->id] ?? 0) : '—' }}</td>
-                            <td style="padding:10px 16px; color:#6b7280; white-space:nowrap;">
+                            <td class="num tg-strong" style="font-weight:700;">{{ $ceremony->draws->whereNotNull('eligible_count')->isNotEmpty() ? $fmt($ceremony->draws->sum('eligible_count')) : '—' }}</td>
+                            <td class="num">{{ (int) $ceremony->lots_total }}</td>
+                            <td class="num" style="font-weight:900; color:var(--tg-yellow);">{{ $ceremony->hasStarted() ? ($effective[$ceremony->id] ?? 0) : '—' }}</td>
+                            <td style="white-space:nowrap;">
                                 {{ $ceremony->creator?->name ?? '—' }}
-                                <span style="font-size:10px; color:#9ca3af; display:block;">{{ $ceremony->created_at->format('d/m/Y H:i') }}</span>
+                                <span class="tg-muted" style="font-size:10.5px; display:block;">{{ $ceremony->created_at->format('d/m/Y H:i') }}</span>
                             </td>
-                            <td style="padding:10px 16px; text-align:right; white-space:nowrap;">
-                                <a href="{{ route('draws.ceremony', $ceremony) }}" wire:navigate
-                                   style="background:#E8ECF8; color:#1B2F6E; font-size:11px; font-weight:600; padding:5px 12px; border-radius:6px; text-decoration:none;">Ouvrir</a>
+                            <td style="text-align:right; white-space:nowrap;">
+                                <a href="{{ route('draws.ceremony', $ceremony) }}" wire:navigate class="tg-btn tg-btn-ghost tg-btn-sm">Ouvrir →</a>
                             </td>
                         </tr>
                     @empty
-                        <tr><td colspan="9" style="padding:30px; text-align:center; color:#9ca3af;">Aucune cérémonie.</td></tr>
+                        <tr><td colspan="9" style="padding:36px; text-align:center;" class="tg-muted">Aucune cérémonie.</td></tr>
                     @endforelse
                 </tbody>
             </table>
         </div>
         @if($ceremonies->hasPages())
-            <div style="padding:12px 16px; border-top:1px solid #e5e7eb;">{{ $ceremonies->links() }}</div>
+            <div style="padding:12px 16px; border-top:1px solid var(--tg-stroke-soft); background:rgba(255,255,255,.92); color:#111827;">{{ $ceremonies->links() }}</div>
         @endif
     </div>
 
     {{-- FORMULAIRE DE CRÉATION --}}
     @if($showForm)
-        <div wire:click="$set('showForm', false)" style="position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:998;"></div>
-        <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:min(500px,95vw); background:#fff; border-radius:14px; z-index:999; box-shadow:0 20px 60px rgba(0,0,0,0.2);">
-            <div style="padding:16px 20px; border-bottom:1px solid #e5e7eb;">
-                <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">Nouvelle cérémonie</p>
-                <p style="font-size:11px; color:#9ca3af; margin:4px 0 0;">Les catégories (Platinum, Gold, Bronze…), leurs critères et leurs lots se règlent ensuite sur la page de la cérémonie.</p>
+        <div wire:click="$set('showForm', false)" class="tg-backdrop"></div>
+        <div class="tg-modal">
+            <div class="tg-modal-head">
+                <p class="tg-eyebrow">Grand Tombola</p>
+                <p class="tg-h2" style="margin-top:4px;">Nouvelle cérémonie</p>
+                <p class="tg-muted" style="margin-top:4px;">Les catégories (Platinum, Gold, Bronze…), leurs critères et leurs lots se règlent ensuite sur la page de la cérémonie.</p>
             </div>
-            <div style="padding:20px; display:flex; flex-direction:column; gap:14px;">
+            <div class="tg-modal-body">
                 <div>
-                    <label style="{{ $labelStyle }}">Nom de la cérémonie <span style="color:#E24B4A;">*</span></label>
-                    <input type="text" wire:model="form.name" placeholder="Ex. Grande tombola de fin d'année" style="{{ $inputStyle }}">
-                    @error('form.name') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
+                    <label class="tg-label">Nom de la cérémonie <span class="tg-req">*</span></label>
+                    <input type="text" wire:model="form.name" placeholder="Ex. Grande tombola de fin d'année" class="tg-input">
+                    @error('form.name') <p class="tg-error">{{ $message }}</p> @enderror
                 </div>
                 <div>
-                    <label style="{{ $labelStyle }}">Description</label>
-                    <textarea wire:model="form.description" rows="2" style="{{ $inputStyle }} resize:vertical;"></textarea>
+                    <label class="tg-label">Description</label>
+                    <textarea wire:model="form.description" rows="2" class="tg-input" style="resize:vertical;"></textarea>
                 </div>
                 <div>
-                    <label style="{{ $labelStyle }}">Date de la cérémonie</label>
-                    <input type="date" wire:model="form.ceremony_date" style="{{ $inputStyle }} max-width:200px;">
-                    @error('form.ceremony_date') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
+                    <label class="tg-label">Date de la cérémonie</label>
+                    <input type="date" wire:model="form.ceremony_date" class="tg-input" style="max-width:200px;">
+                    @error('form.ceremony_date') <p class="tg-error">{{ $message }}</p> @enderror
                 </div>
             </div>
-            <div style="padding:12px 20px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-end; gap:10px;">
-                <button wire:click="$set('showForm', false)" style="background:#f3f4f6; color:#374151; font-size:13px; font-weight:500; padding:8px 20px; border-radius:8px; border:1px solid #e5e7eb; cursor:pointer;">Annuler</button>
-                <button wire:click="save" style="background:#1B2F6E; color:#fff; font-size:13px; font-weight:600; padding:8px 20px; border-radius:8px; border:none; cursor:pointer;">Créer</button>
+            <div class="tg-modal-foot">
+                <button wire:click="$set('showForm', false)" class="tg-btn tg-btn-ghost">Annuler</button>
+                <button wire:click="save" class="tg-btn">Créer</button>
             </div>
         </div>
     @endif
 
+</div>
+</x-tombola.shell>
 </div>

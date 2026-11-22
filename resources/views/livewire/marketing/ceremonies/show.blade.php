@@ -7,6 +7,7 @@ use App\Support\DrawEngine;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 
 /**
@@ -15,7 +16,7 @@ use Livewire\Volt\Component;
  * à la salle de tirage, au tableau d'honneur, au PV et à la clôture.
  * Consultation : draws.view ; préparation et clôture : draws.manage ; salle : draws.run.
  */
-new class extends Component {
+new #[Layout('layouts.tombola')] class extends Component {
 
     public DrawCeremony $ceremony;
 
@@ -194,69 +195,67 @@ new class extends Component {
     }
 };
 ?>
-<div style="padding:24px;" @if($computing) wire:poll.4s @endif>
-
+<div @if($computing) wire:poll.4s @endif>
 @php
-    $inputStyle = 'border:1px solid #d1d5db; border-radius:7px; padding:9px 12px; font-size:13px; color:#111827; outline:none; background:#fff; width:100%; box-sizing:border-box;';
-    $labelStyle = 'font-size:11px; color:#6b7280; display:block; margin-bottom:4px; font-weight:600;';
-    $btnPrimary = 'background:#1B2F6E; color:#fff; font-size:12px; font-weight:600; padding:8px 16px; border-radius:8px; border:none; cursor:pointer; text-decoration:none; display:inline-block;';
-    $btnLight   = 'background:#E8ECF8; color:#1B2F6E; font-size:12px; font-weight:600; padding:8px 14px; border-radius:8px; border:none; cursor:pointer; text-decoration:none; display:inline-block;';
-    $btnDanger  = 'background:#FDECEC; color:#B42318; font-size:12px; font-weight:600; padding:8px 14px; border-radius:8px; border:none; cursor:pointer;';
-    $fmt        = fn ($n) => number_format((float) $n, 0, ',', ' ');
-    [$sLabel, $sFg, $sBg] = $ceremony->statusLabel();
+    $fmt     = fn ($n) => number_format((float) $n, 0, ',', ' ');
     $ready   = $ceremony->isReady();
     $started = $ceremony->hasStarted();
+    $lotsTotal  = $draws->sum(fn ($d) => $d->prizes->sum('quantity'));
+    $lotsDrawn  = $draws->sum(fn ($d) => $d->prizes->sum(fn ($p) => min($p->drawn_count, $p->quantity)));
+    $eligibles  = $draws->sum('eligible_count');
 @endphp
+<x-tombola.shell :title="$ceremony->name" eyebrow="Grand Tombola D-Money · Cérémonie" active="ceremony" :ceremony="$ceremony" :packs="$draws">
+    <x-slot:status>
+        <span class="tg-badge tg-s-{{ $ready && $ceremony->status === 'preparation' ? 'ready' : $ceremony->status }}">{{ $ceremony->statusLabel()[0] }}</span>
+    </x-slot:status>
+<div class="tg-page">
 
-    {{-- EN-TÊTE --}}
-    <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:16px; gap:12px; flex-wrap:wrap;">
-        <div>
-            <a href="{{ route('draws.index') }}" wire:navigate style="font-size:12px; color:#6b7280; text-decoration:none;">← Tirages au sort</a>
-            <h2 style="font-size:17px; font-weight:700; color:#111827; margin:6px 0 4px;">
-                {{ $ceremony->name }}
-                <span style="display:inline-block; vertical-align:middle; margin-left:8px; padding:3px 10px; border-radius:10px; font-size:11px; font-weight:600; color:{{ $sFg }}; background:{{ $sBg }};">{{ $sLabel }}</span>
-            </h2>
-            <p style="font-size:12px; color:#9ca3af; margin:0;">
-                @if($ceremony->ceremony_date) Cérémonie du {{ $ceremony->ceremony_date->format('d/m/Y') }} · @endif
-                créée par {{ $ceremony->creator?->name ?? '—' }} le {{ $ceremony->created_at->format('d/m/Y H:i') }}
-                · un seul lot par client sur toute la cérémonie
-            </p>
-            @if($ceremony->description)
-                <p style="font-size:12px; color:#374151; margin:6px 0 0;">{{ $ceremony->description }}</p>
-            @endif
-        </div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            @if($canRun && $ready && !$ceremony->isClosed())
-                <a href="{{ route('draws.room', $ceremony) }}" target="_blank" style="background:#00843D; color:#fff; font-size:12px; font-weight:700; padding:8px 16px; border-radius:8px; text-decoration:none;">🎲 Salle de tirage ↗</a>
-            @endif
-            @if($started)
-                <a href="{{ route('draws.screen', $ceremony) }}" target="_blank" style="{{ $btnPrimary }}">Tableau d'honneur ↗</a>
-                <a href="{{ route('draws.pv', $ceremony) }}" style="{{ $btnLight }}">PV (PDF)</a>
-                <a href="{{ route('draws.winners', $ceremony) }}" style="{{ $btnLight }}">Gagnants (CSV)</a>
-                <button wire:click="verify" style="{{ $btnLight }}">Vérifier l'intégrité</button>
-            @endif
-            @if($canManage && in_array($ceremony->status, ['in_progress', 'done']))
-                <button wire:click="closeCeremony" wire:confirm="Clôturer la cérémonie ? Plus aucun lot ne pourra être tiré et aucun gagnant écarté ou remplacé." style="{{ $btnPrimary }}">Clôturer</button>
-            @endif
-            @if($canManage && !$ceremony->isClosed())
-                <button wire:click="openEdit" style="{{ $btnLight }}">Modifier</button>
-            @endif
-            @if($canManage && !$started)
-                <button wire:click="deleteCeremony" wire:confirm="Supprimer définitivement la cérémonie, ses listes d'éligibles et ses lots ?" style="{{ $btnDanger }}">Supprimer</button>
-            @endif
+    {{-- INFORMATIONS ET ACTIONS --}}
+    <div class="tg-glass tg-pad">
+        <div style="display:flex; flex-direction:column; gap:14px;">
+            <div style="min-width:0;">
+                <p class="tg-muted">
+                    @if($ceremony->ceremony_date) Cérémonie du <b style="color:#fff;">{{ $ceremony->ceremony_date->format('d/m/Y') }}</b> · @endif
+                    créée par {{ $ceremony->creator?->name ?? '—' }} le {{ $ceremony->created_at->format('d/m/Y H:i') }}
+                    · un seul lot par client sur toute la cérémonie
+                </p>
+                @if($ceremony->description)
+                    <p class="tg-text" style="margin-top:6px;">{{ $ceremony->description }}</p>
+                @endif
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; padding-top:14px; border-top:1px solid var(--tg-stroke-soft);">
+                @if($canRun && $ready && !$ceremony->isClosed())
+                    <a href="{{ route('draws.room', $ceremony) }}" target="_blank" class="tg-btn tg-btn-shine">🎲 Salle de tirage ↗</a>
+                @endif
+                @if($started)
+                    <a href="{{ route('draws.screen', $ceremony) }}" target="_blank" class="tg-btn tg-btn-ghost">Tableau d'honneur ↗</a>
+                    <a href="{{ route('draws.pv', $ceremony) }}" class="tg-btn tg-btn-ghost">PV (PDF)</a>
+                    <a href="{{ route('draws.winners', $ceremony) }}" class="tg-btn tg-btn-ghost">Gagnants (CSV)</a>
+                    <button wire:click="verify" class="tg-btn tg-btn-ghost">Vérifier l'intégrité</button>
+                @endif
+                @if($canManage && in_array($ceremony->status, ['in_progress', 'done']))
+                    <button wire:click="closeCeremony" wire:confirm="Clôturer la cérémonie ? Plus aucun lot ne pourra être tiré et aucun gagnant écarté ou remplacé." class="tg-btn tg-btn-ghost">Clôturer</button>
+                @endif
+                @if($canManage && !$ceremony->isClosed())
+                    <button wire:click="openEdit" class="tg-btn tg-btn-ghost">Modifier</button>
+                @endif
+                @if($canManage && !$started)
+                    <button wire:click="deleteCeremony" wire:confirm="Supprimer définitivement la cérémonie, ses listes d'éligibles et ses lots ?" class="tg-btn tg-btn-danger">Supprimer</button>
+                @endif
+            </div>
         </div>
     </div>
 
     @if(session('success'))
-        <div style="background:#E5F5ED; color:#005C2B; border:1px solid #a7d7b8; border-radius:8px; padding:12px 16px; margin-bottom:16px; font-size:13px;">{{ session('success') }}</div>
+        <div class="tg-alert tg-alert-ok">{{ session('success') }}</div>
     @endif
     @if(session('error'))
-        <div style="background:#FDECEC; color:#B42318; border:1px solid #f5c2c0; border-radius:8px; padding:12px 16px; margin-bottom:16px; font-size:13px;">{{ session('error') }}</div>
+        <div class="tg-alert tg-alert-ko">{{ session('error') }}</div>
     @endif
 
     @if($verifyResult)
         @php $ok = $verifyResult['list_ok'] && $verifyResult['result_ok']; @endphp
-        <div style="margin-bottom:16px; padding:10px 14px; border-radius:8px; font-size:12px; {{ $ok ? 'background:#E5F5ED; color:#005C2B;' : 'background:#FDECEC; color:#B42318;' }}">
+        <div class="tg-alert {{ $ok ? 'tg-alert-ok' : 'tg-alert-ko' }}" style="font-size:12.5px;">
             Contrôle du {{ $verifyResult['at'] }} :
             listes des éligibles {{ $verifyResult['list_ok'] ? 'intactes ✓' : 'MODIFIÉES ✗' }} ·
             tirages rejoués avec leurs graines {{ $verifyResult['result_ok'] ? 'identiques ✓' : 'DIFFÉRENTS ✗' }}
@@ -267,71 +266,80 @@ new class extends Component {
         </div>
     @endif
 
+    {{-- CHIFFRES CLÉS --}}
+    <div class="tg-stats">
+        <div class="tg-glass tg-stat"><p class="tg-stat-value">{{ $draws->count() }}</p><p class="tg-stat-label">Catégorie(s)</p></div>
+        <div class="tg-glass tg-stat"><p class="tg-stat-value">{{ $lotsTotal }}</p><p class="tg-stat-label">Lots au total</p></div>
+        <div class="tg-glass tg-stat tg-stat-accent"><p class="tg-stat-value">{{ $lotsTotal - $lotsDrawn }}</p><p class="tg-stat-label">Lots disponibles</p></div>
+        <div class="tg-glass tg-stat"><p class="tg-stat-value">{{ $lotsDrawn }}</p><p class="tg-stat-label">Lots déjà tirés</p></div>
+        <div class="tg-glass tg-stat"><p class="tg-stat-value">{{ $eligibles ? $fmt($eligibles) : '—' }}</p><p class="tg-stat-label">Clients éligibles</p></div>
+    </div>
+
     {{-- PRÉPARATION : une liste par catégorie --}}
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; flex-wrap:wrap;">
+    <div class="tg-toolbar" style="margin-bottom:-6px;">
         <div>
-            <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">Listes d'éligibles par catégorie</p>
-            <p style="font-size:11px; color:#9ca3af; margin:2px 0 0;">
+            <p class="tg-h2">Listes d'éligibles par catégorie</p>
+            <p class="tg-muted" style="margin-top:3px;">
                 @if($started)
                     Listes et lots figés depuis le premier tirage.
                 @elseif($ready)
-                    ✓ Toutes les listes sont figées et ont leurs lots : la cérémonie est prête.
+                    <span style="color:#8EEBB0; font-weight:700;">✓ Toutes les listes sont figées et ont leurs lots : la cérémonie est prête.</span>
                 @else
                     Pour chaque catégorie : réglez les critères, ajoutez les lots, puis calculez et figez la liste. La salle de tirage s'ouvre quand toutes les listes sont prêtes.
                 @endif
             </p>
         </div>
         @if($canManage && !$started && $canAdd)
-            <button wire:click="openAdd" style="{{ $btnPrimary }}">+ Ajouter une catégorie</button>
+            <button wire:click="openAdd" class="tg-btn">+ Ajouter une catégorie</button>
         @endif
     </div>
 
-    <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:14px;">
+    <div class="tg-pools">
         @forelse($draws as $d)
-            @php
-                [$dLabel, $dFg, $dBg] = $d->statusLabel();
-                $dReady = in_array($d->status, ['ready', 'drawing', 'drawn', 'closed'], true);
-            @endphp
-            <div wire:key="pool-{{ $d->id }}" style="background:#fff; border:1px solid #e5e7eb; border-top:4px solid {{ $d->categoryColor() }}; border-radius:10px; display:flex; flex-direction:column;">
-                <div style="padding:14px 16px; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-                    <span style="display:inline-block; padding:4px 12px; border-radius:8px; font-size:12px; font-weight:800; letter-spacing:1px; text-transform:uppercase; color:#fff; background:{{ $d->categoryColor() }};">{{ $d->categoryName() }}</span>
-                    <span style="padding:3px 10px; border-radius:10px; font-size:11px; font-weight:600; color:{{ $dFg }}; background:{{ $dBg }};">{{ $dLabel }}</span>
+            @php $dReady = in_array($d->status, ['ready', 'drawing', 'drawn', 'closed'], true); @endphp
+            <div wire:key="pool-{{ $d->id }}" id="pack-{{ $d->id }}" class="tg-glass tg-pool" style="scroll-margin-top:20px; --c:{{ $d->categoryColor() }};">
+                <div class="tg-pool-top"></div>
+                <div style="padding:16px 18px 12px; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                    <span class="tg-cat" style="font-size:12px; padding:5px 13px;">{{ $d->categoryName() }}</span>
+                    <span class="tg-badge tg-s-{{ $d->status }}">{{ $d->statusLabel()[0] }}</span>
                 </div>
-                <div style="padding:0 16px 12px; font-size:12px; color:#374151; line-height:1.7;">
+                <div style="padding:0 18px 14px;" class="tg-text">
                     Transactions du {{ $d->period_start->format('d/m/Y') }} au {{ $d->period_end->format('d/m/Y') }},
                     au moins {{ $d->min_txn_count }} transaction(s){{ $d->min_txn_amount > 0 ? ', dont une ≥ ' . $fmt($d->min_txn_amount) . ' FDJ' : '' }}
-                    <br>
-                    @if($dReady)
-                        <strong style="font-size:15px;">{{ $fmt($d->eligible_count) }}</strong> client(s) éligible(s)
-                    @elseif($d->status === 'computing')
-                        <span style="color:#92400E;">⏳ Calcul en cours…</span>
-                    @else
-                        <span style="color:#92400E;">Liste pas encore calculée</span>
-                    @endif
+                    <div style="margin-top:8px;">
+                        @if($dReady)
+                            <span style="font-size:24px; font-weight:900; color:#fff; letter-spacing:-.5px;">{{ $fmt($d->eligible_count) }}</span>
+                            <span class="tg-muted">client(s) éligible(s)</span>
+                        @elseif($d->status === 'computing')
+                            <span style="color:#FFD666; font-weight:700;">⏳ Calcul en cours…</span>
+                        @else
+                            <span style="color:#FFD666; font-weight:700;">Liste pas encore calculée</span>
+                        @endif
+                    </div>
                 </div>
-                <div style="border-top:1px solid #f3f4f6; padding:10px 16px; flex:1;">
+                <div class="tg-sep" style="padding:8px 18px; flex:1;">
                     @forelse($d->prizes as $p)
-                        <div style="display:flex; align-items:center; gap:10px; padding:4px 0; font-size:12px;">
+                        <div class="tg-pool-row">
                             @if($p->imageUrl())
-                                <img src="{{ $p->imageUrl() }}" alt="" style="width:38px; height:28px; object-fit:cover; border-radius:4px;">
+                                <img src="{{ $p->imageUrl() }}" alt="" class="tg-thumb">
                             @endif
-                            <span style="flex:1; color:#111827;">{{ $p->name }}</span>
-                            <span style="color:{{ $p->drawn_count >= $p->quantity ? '#005C2B' : '#6b7280' }}; white-space:nowrap;">
+                            <span style="flex:1; color:#fff; font-weight:600;">{{ $p->name }}</span>
+                            <span style="white-space:nowrap; font-weight:700; color:{{ $p->drawn_count >= $p->quantity ? '#8EEBB0' : 'var(--tg-ink-3)' }};">
                                 {{ $started ? $p->drawn_count . ' / ' : '× ' }}{{ $p->quantity }}
                             </span>
                         </div>
                     @empty
-                        <p style="font-size:12px; color:#B42318; margin:0;">Aucun lot : ajoutez-en depuis la page de la liste.</p>
+                        <p style="font-size:12px; color:#FFB4AB; margin:6px 0;">Aucun lot : ajoutez-en depuis la page de la liste.</p>
                     @endforelse
                 </div>
-                <div style="padding:10px 16px; border-top:1px solid #f3f4f6; text-align:right;">
-                    <a href="{{ route('draws.show', $d) }}" wire:navigate style="{{ $btnLight }} font-size:11px; padding:6px 12px;">
+                <div class="tg-sep" style="padding:12px 18px; text-align:right;">
+                    <a href="{{ route('draws.show', $d) }}" wire:navigate class="tg-btn tg-btn-ghost tg-btn-sm">
                         {{ $canManage && !$started ? 'Configurer →' : 'Voir la liste et les résultats →' }}
                     </a>
                 </div>
             </div>
         @empty
-            <div style="grid-column:1/-1; background:#fff; border:1px dashed #d1d5db; border-radius:10px; padding:30px; text-align:center; color:#9ca3af; font-size:13px;">
+            <div class="tg-empty" style="grid-column:1/-1;">
                 Aucune catégorie pour l'instant. Ajoutez par exemple Platinum, Gold et Bronze : chacune aura ses propres critères d'éligibilité et ses lots.
             </div>
         @endforelse
@@ -339,70 +347,72 @@ new class extends Component {
 
     {{-- MODAL AJOUT D'UNE CATÉGORIE --}}
     @if($showAdd)
-        <div wire:click="$set('showAdd', false)" style="position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:998;"></div>
-        <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:min(480px,95vw); background:#fff; border-radius:14px; z-index:999; box-shadow:0 20px 60px rgba(0,0,0,0.2);">
-            <div style="padding:16px 20px; border-bottom:1px solid #e5e7eb;">
-                <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">Ajouter une catégorie</p>
-                <p style="font-size:11px; color:#9ca3af; margin:4px 0 0;">Critères, exclusions et lots se règlent ensuite sur la page de la liste.</p>
+        <div wire:click="$set('showAdd', false)" class="tg-backdrop"></div>
+        <div class="tg-modal" style="width:min(480px,94vw);">
+            <div class="tg-modal-head">
+                <p class="tg-h2">Ajouter une catégorie</p>
+                <p class="tg-muted" style="margin-top:4px;">Critères, exclusions et lots se règlent ensuite sur la page de la liste.</p>
             </div>
-            <div style="padding:20px; display:flex; flex-direction:column; gap:14px;">
+            <div class="tg-modal-body">
                 <div>
-                    <label style="{{ $labelStyle }}">Catégorie de lots <span style="color:#E24B4A;">*</span></label>
-                    <select wire:model="add.prize_category_id" style="{{ $inputStyle }}">
+                    <label class="tg-label">Catégorie de lots <span class="tg-req">*</span></label>
+                    <select wire:model="add.prize_category_id" class="tg-input">
                         <option value="">— Choisir —</option>
                         @foreach($categories as $c)
                             <option value="{{ $c->id }}">{{ $c->name }}</option>
                         @endforeach
                     </select>
-                    @error('add.prize_category_id') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
+                    @error('add.prize_category_id') <p class="tg-error">{{ $message }}</p> @enderror
                 </div>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                     <div>
-                        <label style="{{ $labelStyle }}">Début de période <span style="color:#E24B4A;">*</span></label>
-                        <input type="date" wire:model="add.period_start" style="{{ $inputStyle }}">
-                        @error('add.period_start') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
+                        <label class="tg-label">Début de période <span class="tg-req">*</span></label>
+                        <input type="date" wire:model="add.period_start" class="tg-input">
+                        @error('add.period_start') <p class="tg-error">{{ $message }}</p> @enderror
                     </div>
                     <div>
-                        <label style="{{ $labelStyle }}">Fin de période <span style="color:#E24B4A;">*</span></label>
-                        <input type="date" wire:model="add.period_end" style="{{ $inputStyle }}">
-                        @error('add.period_end') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
+                        <label class="tg-label">Fin de période <span class="tg-req">*</span></label>
+                        <input type="date" wire:model="add.period_end" class="tg-input">
+                        @error('add.period_end') <p class="tg-error">{{ $message }}</p> @enderror
                     </div>
                 </div>
             </div>
-            <div style="padding:12px 20px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-end; gap:10px;">
-                <button wire:click="$set('showAdd', false)" style="background:#f3f4f6; color:#374151; font-size:13px; font-weight:500; padding:8px 20px; border-radius:8px; border:1px solid #e5e7eb; cursor:pointer;">Annuler</button>
-                <button wire:click="saveAdd" style="background:#1B2F6E; color:#fff; font-size:13px; font-weight:600; padding:8px 20px; border-radius:8px; border:none; cursor:pointer;">Ajouter</button>
+            <div class="tg-modal-foot">
+                <button wire:click="$set('showAdd', false)" class="tg-btn tg-btn-ghost">Annuler</button>
+                <button wire:click="saveAdd" class="tg-btn">Ajouter</button>
             </div>
         </div>
     @endif
 
     {{-- MODAL MODIFICATION DE LA CÉRÉMONIE --}}
     @if($showEdit)
-        <div wire:click="$set('showEdit', false)" style="position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:998;"></div>
-        <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:min(500px,95vw); background:#fff; border-radius:14px; z-index:999; box-shadow:0 20px 60px rgba(0,0,0,0.2);">
-            <div style="padding:16px 20px; border-bottom:1px solid #e5e7eb;">
-                <p style="font-size:14px; font-weight:700; color:#111827; margin:0;">Modifier la cérémonie</p>
+        <div wire:click="$set('showEdit', false)" class="tg-backdrop"></div>
+        <div class="tg-modal">
+            <div class="tg-modal-head">
+                <p class="tg-h2">Modifier la cérémonie</p>
             </div>
-            <div style="padding:20px; display:flex; flex-direction:column; gap:14px;">
+            <div class="tg-modal-body">
                 <div>
-                    <label style="{{ $labelStyle }}">Nom <span style="color:#E24B4A;">*</span></label>
-                    <input type="text" wire:model="edit.name" style="{{ $inputStyle }}">
-                    @error('edit.name') <p style="font-size:10px; color:#E24B4A; margin:4px 0 0;">{{ $message }}</p> @enderror
+                    <label class="tg-label">Nom <span class="tg-req">*</span></label>
+                    <input type="text" wire:model="edit.name" class="tg-input">
+                    @error('edit.name') <p class="tg-error">{{ $message }}</p> @enderror
                 </div>
                 <div>
-                    <label style="{{ $labelStyle }}">Description</label>
-                    <textarea wire:model="edit.description" rows="2" style="{{ $inputStyle }} resize:vertical;"></textarea>
+                    <label class="tg-label">Description</label>
+                    <textarea wire:model="edit.description" rows="2" class="tg-input" style="resize:vertical;"></textarea>
                 </div>
                 <div>
-                    <label style="{{ $labelStyle }}">Date de la cérémonie</label>
-                    <input type="date" wire:model="edit.ceremony_date" style="{{ $inputStyle }} max-width:200px;">
+                    <label class="tg-label">Date de la cérémonie</label>
+                    <input type="date" wire:model="edit.ceremony_date" class="tg-input" style="max-width:200px;">
                 </div>
             </div>
-            <div style="padding:12px 20px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-end; gap:10px;">
-                <button wire:click="$set('showEdit', false)" style="background:#f3f4f6; color:#374151; font-size:13px; font-weight:500; padding:8px 20px; border-radius:8px; border:1px solid #e5e7eb; cursor:pointer;">Annuler</button>
-                <button wire:click="saveEdit" style="background:#1B2F6E; color:#fff; font-size:13px; font-weight:600; padding:8px 20px; border-radius:8px; border:none; cursor:pointer;">Enregistrer</button>
+            <div class="tg-modal-foot">
+                <button wire:click="$set('showEdit', false)" class="tg-btn tg-btn-ghost">Annuler</button>
+                <button wire:click="saveEdit" class="tg-btn">Enregistrer</button>
             </div>
         </div>
     @endif
 
+</div>
+</x-tombola.shell>
 </div>
