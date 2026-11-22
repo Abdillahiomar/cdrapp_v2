@@ -113,7 +113,7 @@
                 @forelse($prize->winners as $w)
                     <tr class="{{ $w->status === 'invalidated' ? 'strike' : '' }}">
                         <td>{{ $w->promoted_at ? 'Suppléant promu' : \App\Models\DrawWinner::KINDS[$w->kind] }}{{ $w->kind !== 'extra' ? ' #' . $w->rank : '' }}</td>
-                        <td class="mono">{{ $phone($w->msisdn) }}</td>
+                        <td class="mono">{{ $phone($w->msisdn) }}@if($w->transaction_id)<br><span style="font-size:8px; color:#6b7280;">Txn {{ $w->transaction_id }}</span>@endif</td>
                         <td>{{ $w->name ?? '—' }}</td>
                         <td class="right">{{ $w->txn_count }}</td>
                         <td>{!! $w->isEffective() ? '<span class="ok">Oui</span>' : 'Non' !!}</td>

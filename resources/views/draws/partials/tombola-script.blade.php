@@ -5,7 +5,7 @@
     if (window.tgDraw) return;   // déjà chargé (navigation wire:navigate)
 
     const sleep = ms => new Promise(r => setTimeout(r, ms));
-    const fakeMasked = () => '2537****' + String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+    const fakeMasked = () => '77 ** ** ' + String(Math.floor(Math.random() * 100)).padStart(2, '0');
 
     // Scène de tirage : le gagnant est tiré et enregistré par le serveur ($wire.launch),
     // le défilement n'est qu'un habillage (aucun tirage côté navigateur).
@@ -13,7 +13,7 @@
         phase: hasWinner ? 'done' : 'idle',
         shown: hasWinner ? 99 : 0,
         fresh: false, full: false, settled: false,
-        roll: '2537****•••', sub: 'Numéro du gagnant', progress: 0,
+        roll: '77 ** ** **', sub: 'Numéro du gagnant', progress: 0,
 
         init() {
             // État partagé avec la carte des suppléants (hors de la scène)
@@ -54,10 +54,10 @@
         },
 
         again() { this.reset(); },
-        reset() { this.phase = 'idle'; this.progress = 0; this.roll = '2537****•••'; this.sub = 'Numéro du gagnant'; this.settled = false; this.shown = 0; },
+        reset() { this.phase = 'idle'; this.progress = 0; this.roll = '77 ** ** **'; this.sub = 'Numéro du gagnant'; this.settled = false; this.shown = 0; },
 
-        copy(value) {
-            const done = () => tgToast('Numéro copié : ' + value);
+        copy(value, label = 'Numéro copié') {
+            const done = () => tgToast(label + ' : ' + value);
             if (navigator.clipboard?.writeText) navigator.clipboard.writeText(value).then(done, done);
             else { const t = document.createElement('textarea'); t.value = value; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); } catch (e) {} t.remove(); done(); }
         },

@@ -73,6 +73,7 @@ new class extends Component {
             'min_txn_count'      => $d->min_txn_count,
             'min_txn_amount'       => (float) $d->min_txn_amount,
             'chance_mode'          => $d->chance_mode,
+            'draw_mode'            => $d->draw_mode ?? 'client',
             'exclude_employees'    => $d->exclude_employees,
             'exclude_rds_lite'     => $d->exclude_rds_lite,
             'exclude_winners_days' => $d->exclude_winners_days,
@@ -129,6 +130,7 @@ new class extends Component {
             'form.min_txn_count'        => 'required|integer|min:1',
             'form.min_txn_amount'       => 'required|numeric|min:0',
             'form.chance_mode'          => 'required|in:' . implode(',', array_keys(Draw::CHANCE_MODES)),
+            'form.draw_mode'            => 'required|in:' . implode(',', array_keys(Draw::DRAW_MODES)),
             'form.exclude_winners_days' => 'nullable|integer|min:1|max:3650',
             'form.blacklist'            => 'nullable|string|max:20000',
         ], [
@@ -149,7 +151,8 @@ new class extends Component {
             'reason_indexes'       => $reasons ?: null,
             'min_txn_count'        => (int) $this->form['min_txn_count'],
             'min_txn_amount'       => (float) $this->form['min_txn_amount'],
-            'chance_mode'          => $this->form['chance_mode'],
+            'chance_mode'          => $this->form['draw_mode'] === 'transaction' ? 'per_transaction' : $this->form['chance_mode'],
+            'draw_mode'            => $this->form['draw_mode'],
             'exclude_employees'    => (bool) $this->form['exclude_employees'],
             'exclude_rds_lite'     => (bool) $this->form['exclude_rds_lite'],
             'exclude_winners_days' => $this->form['exclude_winners_days'] ?: null,
@@ -627,12 +630,27 @@ new class extends Component {
             {{-- Colonne droite : options du tirage et exclusions --}}
             <div style="display:flex; flex-direction:column; gap:14px;">
                 <div>
-                    <label style="{{ $labelStyle }}">Chances de gagner</label>
-                    @foreach(\App\Models\Draw::CHANCE_MODES as $key => $label)
+                    <label style="{{ $labelStyle }}">Mode de tirage</label>
+                    @foreach(\App\Models\Draw::DRAW_MODES as $key => $label)
                         <label style="display:flex; align-items:flex-start; gap:8px; font-size:12px; color:#374151; padding:3px 0;">
-                            <input type="radio" wire:model="form.chance_mode" value="{{ $key }}" @disabled(!$editable) style="margin-top:2px;"> {{ $label }}
+                            <input type="radio" wire:model.live="form.draw_mode" value="{{ $key }}" @disabled(!$editable) style="margin-top:2px;"> {{ $label }}
                         </label>
                     @endforeach
+                    @if(($form['draw_mode'] ?? 'client') === 'transaction')
+                        <p style="font-size:10px; color:#9ca3af; margin:4px 0 0;">Le gagnant est désigné par une transaction : sa Transaction ID, son nom complet et son numéro s'affichent dans la salle de tirage. Un client exclu ou déjà gagnant perd tous ses tickets.</p>
+                    @endif
+                </div>
+                <div>
+                    <label style="{{ $labelStyle }}">Chances de gagner</label>
+                    @if(($form['draw_mode'] ?? 'client') === 'transaction')
+                        <p style="font-size:12px; color:#374151; margin:0;">1 chance par transaction (imposé par le mode « par transaction »).</p>
+                    @else
+                        @foreach(\App\Models\Draw::CHANCE_MODES as $key => $label)
+                            <label style="display:flex; align-items:flex-start; gap:8px; font-size:12px; color:#374151; padding:3px 0;">
+                                <input type="radio" wire:model="form.chance_mode" value="{{ $key }}" @disabled(!$editable) style="margin-top:2px;"> {{ $label }}
+                            </label>
+                        @endforeach
+                    @endif
                 </div>
                 <div>
                     <label style="{{ $labelStyle }}">Lots par client</label>
@@ -750,7 +768,7 @@ new class extends Component {
                 </div>
                 <div style="font-size:11px; color:#6b7280; margin-bottom:14px; line-height:1.7;">
                     Liste figée le {{ $draw->computed_at?->format('d/m/Y H:i') }} par {{ $draw->computer?->name ?? '—' }}
-                    · {{ $fmt($draw->ticket_count) }} chance(s) au total ({{ \App\Models\Draw::CHANCE_MODES[$draw->chance_mode] }})
+                    · {{ $fmt($draw->ticket_count) }} {{ $draw->isTicketMode() ? 'ticket(s) dans l\'urne (tirage par transaction)' : 'chance(s) au total (' . \App\Models\Draw::CHANCE_MODES[$draw->chance_mode] . ')' }}
                     <br>Empreinte SHA-256 : <span style="font-family:monospace; color:#111827;">{{ $draw->eligible_hash }}</span>
                 </div>
 
@@ -855,7 +873,12 @@ new class extends Component {
                                                 {{ $w->promoted_at ? 'Suppléant promu' : \App\Models\DrawWinner::KINDS[$w->kind] }} {{ $w->kind !== 'extra' ? '#' . $w->rank : '' }}
                                             </span>
                                         </td>
-                                        <td style="padding:8px 14px; font-family:monospace; color:#111827; white-space:nowrap;">{{ \App\Support\DrawEngine::display($w->msisdn) }}</td>
+                                        <td style="padding:8px 14px; font-family:monospace; color:#111827; white-space:nowrap;">
+                                            {{ \App\Support\DrawEngine::display($w->msisdn) }}
+                                            @if($w->transaction_id)
+                                                <span style="display:block; font-size:10px; color:#6b7280;" title="Transaction ID du ticket tiré">Txn {{ $w->transaction_id }}</span>
+                                            @endif
+                                        </td>
                                         <td style="padding:8px 14px; color:#111827; font-weight:{{ $isEff ? '600' : '400' }};">{{ $w->name ?? '—' }}</td>
                                         <td style="padding:8px 14px; color:#6b7280; font-size:11px;">
                                             @if($w->status === 'invalidated')

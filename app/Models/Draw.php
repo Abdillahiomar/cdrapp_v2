@@ -29,9 +29,14 @@ class Draw extends Model
         'per_transaction' => '1 chance par transaction (favorise les clients les plus actifs)',
     ];
 
+    public const DRAW_MODES = [
+        'client'      => 'Par client : on tire un client parmi les éligibles',
+        'transaction' => 'Par transaction : chaque transaction est un ticket, on tire un ticket (Transaction ID conservée)',
+    ];
+
     protected $fillable = [
         'draw_ceremony_id', 'prize_category_id', 'name', 'description', 'period_start', 'period_end', 'txn_indexes', 'reason_indexes', 'min_txn_count', 'min_txn_amount',
-        'chance_mode', 'one_prize_per_client', 'exclude_employees', 'exclude_rds_lite', 'exclude_winners_days', 'blacklist',
+        'chance_mode', 'draw_mode', 'one_prize_per_client', 'exclude_employees', 'exclude_rds_lite', 'exclude_winners_days', 'blacklist',
         'status', 'error', 'funnel', 'eligible_count', 'ticket_count', 'eligible_hash', 'seed',
         'created_by', 'computed_by', 'drawn_by', 'closed_by', 'computed_at', 'drawn_at', 'closed_at',
     ];
@@ -90,6 +95,12 @@ class Draw extends Model
     public function statusLabel(): array
     {
         return self::STATUSES[$this->status] ?? [$this->status, '#6b7280', '#F3F4F6'];
+    }
+
+    /** Mode « par transaction » : on tire un ticket (une transaction), pas un client */
+    public function isTicketMode(): bool
+    {
+        return $this->draw_mode === 'transaction';
     }
 
     /** Critères et options modifiables uniquement avant de figer la liste */

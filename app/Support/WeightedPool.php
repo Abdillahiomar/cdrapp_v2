@@ -43,6 +43,17 @@ class WeightedPool
     /** Indice tiré proportionnellement aux poids, null si l'urne est vide */
     public function pick(Randomizer $randomizer): ?int
     {
+        return $this->pickTicket($randomizer)[0] ?? null;
+    }
+
+    /**
+     * Même tirage que pick(), avec en plus la position du ticket chez le
+     * participant tiré : [indice, n° de ticket 1..poids]. Tirer un participant
+     * proportionnellement à son poids puis ce rang revient à tirer un ticket
+     * uniformément parmi tous les tickets. null si l'urne est vide.
+     */
+    public function pickTicket(Randomizer $randomizer): ?array
+    {
         if ($this->total <= 0) {
             return null;
         }
@@ -57,7 +68,7 @@ class WeightedPool
             }
         }
 
-        return $pos;
+        return [$pos, $remaining];
     }
 
     /** Retire un participant de l'urne (il ne peut plus sortir) */

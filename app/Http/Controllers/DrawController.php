@@ -41,6 +41,7 @@ class DrawController extends Controller
                 $w->promoted_at ? 'Suppléant promu' : DrawWinner::KINDS[$w->kind],
                 $w->kind === 'extra' ? '' : $w->rank,
                 $w->msisdn,
+                $w->transaction_id,
                 $w->name,
                 $w->txn_count,
                 $w->isEffective() ? 'Oui' : 'Non',
@@ -53,7 +54,7 @@ class DrawController extends Controller
 
         return $this->csv(
             $this->fileName('ceremonie-' . $ceremony->id, $ceremony->name, 'gagnants'),
-            ['Catégorie', 'Lot', 'Type', 'Rang', 'Numéro', 'Nom', 'Transactions', 'Gagnant retenu', 'Statut', 'Motif', 'Remplace', 'Tiré le'],
+            ['Catégorie', 'Lot', 'Type', 'Rang', 'Numéro', 'Transaction ID', 'Nom', 'Transactions', 'Gagnant retenu', 'Statut', 'Motif', 'Remplace', 'Tiré le'],
             fn () => $rows
         );
     }

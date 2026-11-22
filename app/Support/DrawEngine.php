@@ -49,6 +49,16 @@ class DrawEngine
             : $msisdn;
     }
 
+    /** 25377046542 → 77 ** ** 42 (salle de tirage : 2 premiers et 2 derniers chiffres) */
+    public static function maskShort(string $msisdn): string
+    {
+        $local = str_starts_with($msisdn, '253') && strlen($msisdn) === 11 ? substr($msisdn, 3) : $msisdn;
+
+        return strlen($local) > 4
+            ? substr($local, 0, 2) . ' ' . trim(str_repeat('** ', intdiv(strlen($local) - 4 + 1, 2))) . ' ' . substr($local, -2)
+            : $local;
+    }
+
     /** 25377046542 → 77 04 65 42 */
     public static function display(string $msisdn): string
     {
@@ -154,15 +164,44 @@ class DrawEngine
                  WHERE p.draw_id = ? AND p.msisdn = k.msisdn
             ", [$draw->id, $draw->id]);
 
+            DB::table('draw_tickets')->where('draw_id', $draw->id)->delete();
+
+            if ($draw->isTicketMode()) {
+                // Une transaction = un ticket, pour les seuls clients restés éligibles
+                DB::insert("
+                    INSERT INTO draw_tickets (draw_id, msisdn, transaction_id, amount, txn_at)
+                    SELECT ?, f.debit_party_identifier, f.transaction_id, COALESCE(f.actual_amount, 0) * {$f}, f.transaction_initiated_time
+                      FROM fact_txn_v2 f
+                     WHERE f.transaction_initiated_time >= ? AND f.transaction_initiated_time < ?
+                       AND f.status = 'Completed'
+                       AND f.debit_party_type = 'Customer'
+                       AND f.transaction_id IS NOT NULL
+                       AND ({$typeSql})
+                       AND f.debit_party_identifier IN (SELECT msisdn FROM draw_participants WHERE draw_id = ?)
+                    ON CONFLICT (draw_id, transaction_id) DO NOTHING
+                ", array_merge([$draw->id, $start, $end], $typeArgs, [$draw->id]));
+
+                // Chances = tickets figés (aligne les compteurs si des transactions sont arrivées entre-temps)
+                DB::update("
+                    UPDATE draw_participants p SET txn_count = t.n
+                      FROM (SELECT msisdn, COUNT(*) AS n FROM draw_tickets WHERE draw_id = ? GROUP BY msisdn) t
+                     WHERE p.draw_id = ? AND p.msisdn = t.msisdn AND p.txn_count <> t.n
+                ", [$draw->id, $draw->id]);
+                $participants()->whereNotIn('msisdn', DB::table('draw_tickets')->where('draw_id', $draw->id)->select('msisdn'))->delete();
+            }
+
             $count    = $participants()->count();
             $funnel[] = ['label' => 'Clients éligibles', 'value' => $count];
+            if ($draw->isTicketMode()) {
+                $funnel[] = ['label' => 'Tickets (transactions) dans l\'urne', 'value' => DB::table('draw_tickets')->where('draw_id', $draw->id)->count()];
+            }
 
             $draw->update([
                 'status'         => 'ready',
                 'error'          => null,
                 'funnel'         => $funnel,
                 'eligible_count' => $count,
-                'ticket_count'   => $draw->chance_mode === 'per_transaction' ? (int) $participants()->sum('txn_count') : $count,
+                'ticket_count'   => $this->perTicket($draw) ? (int) $participants()->sum('txn_count') : $count,
                 'eligible_hash'  => $this->hash($draw),
                 'computed_by'    => $userId,
                 'computed_at'    => Carbon::now(),
@@ -181,6 +220,7 @@ class DrawEngine
 
         DB::transaction(function () use ($draw) {
             DB::table('draw_participants')->where('draw_id', $draw->id)->delete();
+            DB::table('draw_tickets')->where('draw_id', $draw->id)->delete();
             $draw->update([
                 'status' => 'draft', 'error' => null, 'funnel' => null, 'eligible_count' => null,
                 'ticket_count' => null, 'eligible_hash' => null, 'computed_by' => null, 'computed_at' => null,
@@ -190,16 +230,47 @@ class DrawEngine
         unset($this->participantsCache[$draw->id]);
     }
 
-    /** Empreinte de la liste figée : « msisdn;chances » par ligne, triée par numéro */
+    /**
+     * Empreinte de la liste figée : « msisdn;chances » par client, triée par numéro ;
+     * en mode transaction, « msisdn;transaction_id » par ticket, dans l'ordre du tirage.
+     */
     public function hash(Draw $draw): string
     {
         $ctx = hash_init('sha256');
 
-        foreach ($this->loadParticipants($draw, fresh: true) as $p) {
-            hash_update($ctx, $p->msisdn . ';' . $this->weight($draw, $p) . "\n");
+        if ($draw->isTicketMode()) {
+            foreach ($this->ticketsQuery($draw)->cursor() as $t) {
+                hash_update($ctx, $t->msisdn . ';' . $t->transaction_id . "\n");
+            }
+        } else {
+            foreach ($this->loadParticipants($draw, fresh: true) as $p) {
+                hash_update($ctx, $p->msisdn . ';' . $this->weight($draw, $p) . "\n");
+            }
         }
 
         return hash_final($ctx);
+    }
+
+    /** Tickets figés dans l'ordre du tirage : par numéro, puis par transaction (ordre binaire, indépendant de la collation) */
+    private function ticketsQuery(Draw $draw)
+    {
+        return DB::table('draw_tickets')
+            ->where('draw_id', $draw->id)
+            ->orderByRaw('msisdn COLLATE "C"')
+            ->orderByRaw('transaction_id COLLATE "C"')
+            ->select('msisdn', 'transaction_id');
+    }
+
+    /** n-ième ticket (1..n) d'un client, dans l'ordre du tirage */
+    private function ticketOf(Draw $draw, string $msisdn, int $position): ?string
+    {
+        return DB::table('draw_tickets')
+            ->where('draw_id', $draw->id)
+            ->where('msisdn', $msisdn)
+            ->orderByRaw('transaction_id COLLATE "C"')
+            ->offset($position - 1)
+            ->limit(1)
+            ->value('transaction_id');
     }
 
     // ── 2. Tirage lot par lot ─────────────────────────────────────────────
@@ -279,7 +350,7 @@ class DrawEngine
                 }
 
                 $replayed = $row->seed ? $this->choose($draw, $participants, $excluded, $row->seed) : null;
-                if ($replayed?->msisdn !== $row->msisdn) {
+                if ($replayed?->msisdn !== $row->msisdn || ($draw->isTicketMode() && $replayed?->transaction_id !== $row->transaction_id)) {
                     $resultOk = false;
                     break;
                 }
@@ -391,9 +462,10 @@ class DrawEngine
         $p    = $this->choose($draw, $this->loadParticipants($draw), $excluded, $seed);
 
         return $p ? DrawWinner::create([
-            'draw_id'       => $draw->id,
-            'draw_prize_id' => $prize->id,
-            'msisdn'        => $p->msisdn,
+            'draw_id'        => $draw->id,
+            'draw_prize_id'  => $prize->id,
+            'msisdn'         => $p->msisdn,
+            'transaction_id' => $p->transaction_id ?? null,
             'name'          => $p->name,
             'txn_count'     => $p->txn_count,
             'kind'          => $kind,
@@ -441,13 +513,25 @@ class DrawEngine
         }
     }
 
-    /** Tirage pondéré déterministe pour une graine donnée ; null si l'urne est vide */
+    /**
+     * Tirage pondéré déterministe pour une graine donnée ; null si l'urne est vide.
+     * Mode transaction : même tirage, plus le rang du ticket chez le client tiré
+     * (= un ticket tiré uniformément parmi tous les tickets non exclus).
+     */
     private function choose(Draw $draw, array $participants, array $excluded, string $seed): ?object
     {
         $weights = array_map(fn ($p) => isset($excluded[$p->msisdn]) ? 0 : $this->weight($draw, $p), $participants);
-        $i       = (new WeightedPool($weights))->pick(new Randomizer(new Xoshiro256StarStar(hex2bin($seed))));
+        $picked  = (new WeightedPool($weights))->pickTicket(new Randomizer(new Xoshiro256StarStar(hex2bin($seed))));
 
-        return $i === null ? null : $participants[$i];
+        if ($picked === null) {
+            return null;
+        }
+
+        [$i, $position] = $picked;
+        $p = clone $participants[$i];
+        $p->transaction_id = $draw->isTicketMode() ? $this->ticketOf($draw, $p->msisdn, $position) : null;
+
+        return $p;
     }
 
     /**
@@ -470,6 +554,12 @@ class DrawEngine
 
     private function weight(Draw $draw, object $participant): int
     {
-        return $draw->chance_mode === 'per_transaction' ? max(1, (int) $participant->txn_count) : 1;
+        return $this->perTicket($draw) ? max(1, (int) $participant->txn_count) : 1;
+    }
+
+    /** Une chance par transaction (choix de la liste, ou imposé par le mode transaction) */
+    private function perTicket(Draw $draw): bool
+    {
+        return $draw->chance_mode === 'per_transaction' || $draw->isTicketMode();
     }
 }

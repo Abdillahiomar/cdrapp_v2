@@ -266,6 +266,8 @@ button.tg-stat:hover { transform: translateY(-2px); }
 .tg-txn { margin-top: 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 14px;
     background: rgba(7,21,48,.55); border: 1px solid rgba(255,255,255,.16); }
 .tg-txn code { font-family: ui-monospace, Consolas, monospace; font-size: clamp(18px, 2.4vw, 26px); font-weight: 800; color: var(--tg-yellow); letter-spacing: 2px; word-break: break-all; }
+.tg-txn-id { margin-top: 10px; background: linear-gradient(150deg, rgba(245,196,0,.14), rgba(7,21,48,.6)); border-color: rgba(245,196,0,.45); }
+.tg-txn-id code { color: #fff; font-size: clamp(16px, 2vw, 22px); }
 .tg-copy { flex-shrink: 0; width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; cursor: pointer;
     background: rgba(255,255,255,.08); border: 1px solid var(--tg-stroke); transition: background .2s; }
 .tg-copy:hover { background: rgba(245,196,0,.2); }
