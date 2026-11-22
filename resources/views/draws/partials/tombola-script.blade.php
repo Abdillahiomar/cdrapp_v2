@@ -94,5 +94,14 @@
         };
         window.__tgConfettiRaf = requestAnimationFrame(frame);
     };
+    // Tableau d'honneur : nouveau « dernier gagnant » depuis le dernier rafraîchissement → éclat + confettis
+    // (pas au premier affichage de la page)
+    window.tgHonorNew = (id, el) => {
+        if (window.__tgHonorLast !== undefined && window.__tgHonorLast !== id) {
+            el.classList.add('is-flash');
+            window.tgConfetti();
+        }
+        window.__tgHonorLast = id;
+    };
 })();
 </script>

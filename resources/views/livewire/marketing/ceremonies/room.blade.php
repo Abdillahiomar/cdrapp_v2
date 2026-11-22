@@ -359,7 +359,7 @@ new #[Layout('layouts.tombola')] class extends Component {
                 <div style="display:flex; align-items:center; gap:14px;">
                     <div class="tg-pack-badge">{!! $icon('<path d="M6 3h12l4 6-10 12L2 9z"/><path d="M2 9h20M12 21L8 9l4-6 4 6z"/>', '#10264B') !!}</div>
                     <div>
-                        <p class="tg-pack-name" style="color:var(--c);">Pack {{ $d->categoryName() }}</p>
+                        <p class="tg-pack-name" style="color:color-mix(in srgb, var(--c) 55%, #fff);">Pack {{ $d->categoryName() }}</p>
                         <p class="tg-muted" style="margin-top:2px;">{{ $d->prizes->count() }} rang(s) de lots</p>
                     </div>
                 </div>
