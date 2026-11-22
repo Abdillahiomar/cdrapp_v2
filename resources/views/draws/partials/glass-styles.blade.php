@@ -219,6 +219,90 @@ button.tg-stat:hover { transform: translateY(-2px); }
 .tg-chip-float.is-done { color: rgba(255,255,255,.8); }
 .tg-noimg svg { width: 72px; height: 72px; filter: drop-shadow(0 12px 18px rgba(0,0,0,.35)); }
 .tg-lot-visual img { background: #fff; }
+[x-cloak] { display: none !important; }
+
+/* ── Page de révélation d'un lot ── */
+.tg-reveal { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 20px; align-items: start; }
+.tg-hero { overflow: hidden; }
+.tg-hero-visual { aspect-ratio: 4 / 3; display: grid; place-items: center; position: relative; overflow: hidden; border-radius: 18px 18px 0 0;
+    background: radial-gradient(circle at 50% 40%, rgba(245,196,0,.25), transparent 55%), linear-gradient(160deg, var(--tg-navy-2), var(--tg-navy)); }
+.tg-hero-visual img { position: relative; max-width: 82%; max-height: 82%; object-fit: contain; border-radius: 16px; background: #fff; padding: 10px;
+    box-shadow: 0 22px 44px rgba(0,0,0,.45); animation: tg-float 5s ease-in-out infinite; }
+.tg-hero-icon svg { position: relative; width: 150px; height: 150px; filter: drop-shadow(0 22px 30px rgba(0,0,0,.45)); animation: tg-float 5s ease-in-out infinite; }
+@keyframes tg-float { 50% { transform: translateY(-10px) rotate(1deg); } }
+.tg-rays { position: absolute; inset: -30%; animation: tg-spin 40s linear infinite;
+    background: conic-gradient(from 0deg, transparent 0 8%, rgba(245,196,0,.10) 10%, transparent 12% 25%, rgba(255,255,255,.06) 27%, transparent 29% 45%, rgba(245,196,0,.08) 47%, transparent 49% 70%, rgba(255,255,255,.05) 72%, transparent 74%); }
+@keyframes tg-spin { to { transform: rotate(360deg); } }
+.tg-hero-details { padding: 20px 22px 22px; }
+.tg-hero-title { font-size: clamp(22px, 2.4vw, 30px) !important; font-weight: 900; line-height: 1.15; margin: 12px 0 14px !important; }
+.tg-kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.tg-kv div { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.05); border: 1px solid var(--tg-stroke-soft); min-width: 0; }
+.tg-kv small, .tg-winner-grid small, .tg-txn small { display: block; font-size: 10px; color: var(--tg-ink-3); letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 2px; }
+.tg-kv span { font-size: 14px; font-weight: 800; }
+.tg-stage { padding: 26px; text-align: center; overflow: hidden; }
+.tg-slot { margin: 22px auto 18px; max-width: 520px; border-radius: 18px; padding: 22px 18px; position: relative; overflow: hidden;
+    background: rgba(7,21,48,.55); border: 1px solid rgba(255,255,255,.14); box-shadow: inset 0 0 40px rgba(0,0,0,.35); }
+.tg-slot-number { font-family: ui-monospace, Consolas, monospace; font-size: clamp(30px, 4.6vw, 50px); font-weight: 800; letter-spacing: 4px; color: #fff; transition: color .4s; }
+.tg-slot-sub { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--tg-ink-3); margin-top: 6px; letter-spacing: 1px; }
+.tg-slot.is-rolling .tg-slot-number { animation: tg-blur .12s linear infinite; }
+@keyframes tg-blur { 50% { filter: blur(1.2px); transform: translateY(2px); } }
+.tg-progress { height: 4px; max-width: 520px; margin: 0 auto 20px; border-radius: 4px; background: rgba(255,255,255,.08); overflow: hidden; }
+.tg-progress i { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, rgba(245,196,0,.4), var(--tg-yellow)); }
+.tg-launch { padding: 16px 38px; font-size: 16px; letter-spacing: 3px; border-radius: 14px; }
+.tg-launch:disabled { opacity: .55; }
+.tg-winner { margin: 0 auto; max-width: 640px; text-align: left; padding: 24px; border-radius: 22px; position: relative; overflow: hidden;
+    background: linear-gradient(150deg, rgba(245,196,0,.20), rgba(245,196,0,.05) 45%, rgba(255,255,255,.05)); border: 1px solid rgba(245,196,0,.45);
+    box-shadow: 0 0 0 1px rgba(245,196,0,.15), 0 30px 70px rgba(245,196,0,.16), inset 0 1px 0 rgba(255,255,255,.2); }
+.tg-winner::before { content: ''; position: absolute; top: -60%; left: -40%; width: 60%; height: 220%; transform: rotate(18deg); pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.14), transparent); animation: tg-sweep 2.4s .4s ease-out both; }
+@keyframes tg-sweep { from { left: -40%; } to { left: 130%; } }
+.tg-winner-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.tg-trophy { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; background: var(--tg-yellow); box-shadow: 0 10px 24px rgba(245,196,0,.4); flex-shrink: 0; }
+.tg-trophy svg { width: 24px; height: 24px; }
+.tg-provisional { display: inline-block; font-size: 11.5px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; padding: 7px 12px; border-radius: 999px;
+    color: #FFE27A; background: rgba(245,196,0,.12); border: 1px dashed rgba(245,196,0,.6); }
+.tg-provisional.is-ko { color: #FFB4AB; background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.5); }
+.tg-winner-name { font-size: clamp(26px, 3.4vw, 40px); font-weight: 900; letter-spacing: -.5px; line-height: 1.1; }
+.tg-txn { margin-top: 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 14px;
+    background: rgba(7,21,48,.55); border: 1px solid rgba(255,255,255,.16); }
+.tg-txn code { font-family: ui-monospace, Consolas, monospace; font-size: clamp(18px, 2.4vw, 26px); font-weight: 800; color: var(--tg-yellow); letter-spacing: 2px; word-break: break-all; }
+.tg-copy { flex-shrink: 0; width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; cursor: pointer;
+    background: rgba(255,255,255,.08); border: 1px solid var(--tg-stroke); transition: background .2s; }
+.tg-copy:hover { background: rgba(245,196,0,.2); }
+.tg-copy svg { width: 18px; height: 18px; }
+.tg-winner-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.tg-winner-grid div { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.05); border: 1px solid var(--tg-stroke-soft); min-width: 0; }
+.tg-winner-grid span { font-size: 14px; font-weight: 700; }
+.tg-step { opacity: 0; transform: translateY(14px); filter: blur(6px); transition: opacity .6s ease, transform .6s cubic-bezier(.2,.8,.2,1), filter .6s ease; }
+.tg-step.in { opacity: 1; transform: none; filter: none; }
+.tg-subs { padding: 20px; }
+.tg-subs-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.tg-subs-head h3 { font-size: 15px; font-weight: 800; }
+.tg-subs-head p { font-size: 12px; color: var(--tg-ink-3); }
+.tg-subs-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); gap: 12px; }
+.tg-sub { padding: 14px; border-radius: 14px; background: rgba(255,255,255,.05); border: 1px solid var(--tg-stroke-soft); }
+.tg-sub-rank { display: inline-block; font-size: 10.5px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; color: var(--tg-navy);
+    background: rgba(255,255,255,.88); padding: 4px 9px; border-radius: 999px; margin-bottom: 10px; }
+.tg-sub-name { font-size: 14px; font-weight: 800; }
+.tg-sub-phone { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--tg-ink-2); margin-top: 3px; }
+.tg-sub-txn { font-size: 11px; color: var(--tg-ink-3); margin-top: 6px; }
+.tg-toast { position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 20px); opacity: 0; transition: all .3s; z-index: 70; pointer-events: none;
+    padding: 11px 18px; border-radius: 12px; font-size: 13px; font-weight: 700; color: #fff; background: rgba(16,38,75,.92); border: 1px solid rgba(245,196,0,.5); }
+.tg-toast.show { opacity: 1; transform: translate(-50%, 0); }
+@media (max-width: 1180px) {
+    .tg-reveal { grid-template-columns: minmax(0, 1fr); }
+    .tg-hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .tg-hero-visual { aspect-ratio: auto; min-height: 260px; border-radius: 18px 0 0 18px; }
+}
+@media (max-width: 640px) {
+    .tg-hero { display: block; }
+    .tg-hero-visual { border-radius: 18px 18px 0 0; }
+    .tg-stage { padding: 20px 14px; }
+    .tg-winner { padding: 18px; }
+    .tg-winner-grid { grid-template-columns: minmax(0, 1fr); }
+    .tg-launch { width: 100%; padding: 15px 18px; }
+}
+
 .tg-lot-ref { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--tg-ink-2); }
 .tg-lot-winner { font-size: 12px; color: var(--tg-ink-2); padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,.05); }
 .tg-lot-winner b { color: #fff; }
