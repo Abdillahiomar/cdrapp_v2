@@ -15,6 +15,11 @@
     --tg-stroke: rgba(255, 255, 255, .16);
     --tg-stroke-soft: rgba(255, 255, 255, .09);
     --tg-shadow: 0 18px 44px rgba(2, 8, 24, .40);
+    --tg-fg: #fff;
+    --tg-gold-ink: #F5C400;
+    --tg-ok: #8EEBB0;
+    --tg-warn: #FFD666;
+    --tg-ko: #FFB4AB;
     position: relative; min-height: 100vh;
     color: #fff; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased;
 }
@@ -262,7 +267,7 @@ button.tg-stat:hover { transform: translateY(-2px); }
 .tg-provisional { display: inline-block; font-size: 11.5px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; padding: 7px 12px; border-radius: 999px;
     color: #FFE27A; background: rgba(245,196,0,.12); border: 1px dashed rgba(245,196,0,.6); }
 .tg-provisional.is-ko { color: #FFB4AB; background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.5); }
-.tg-winner-name { font-size: clamp(26px, 3.4vw, 40px); font-weight: 900; letter-spacing: -.5px; line-height: 1.1; }
+.tg-winner-name { font-size: clamp(26px, 3.4vw, 40px); font-weight: 900; letter-spacing: -.3px; line-height: 1.1; text-transform: uppercase; }
 .tg-txn { margin-top: 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 14px;
     background: rgba(7,21,48,.55); border: 1px solid rgba(255,255,255,.16); }
 .tg-txn code { font-family: ui-monospace, Consolas, monospace; font-size: clamp(18px, 2.4vw, 26px); font-weight: 800; color: var(--tg-yellow); letter-spacing: 2px; word-break: break-all; }
@@ -391,7 +396,7 @@ button.tg-stat:hover { transform: translateY(-2px); }
 .tg-lot-winner { font-size: 12px; color: var(--tg-ink-2); padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,.05); }
 .tg-lot-winner b { color: #fff; }
 .tg-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
-.tg-pack-name { font-size: clamp(17px, 1.8vw, 21px); font-weight: 900; letter-spacing: 2.5px; text-transform: uppercase; margin: 0; color: #fff; }
+.tg-pack-name { font-size: clamp(17px, 1.8vw, 21px); font-weight: 900; letter-spacing: 2.5px; text-transform: uppercase; margin: 0; }
 .tg-pack-badge { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; flex-shrink: 0;
     background: linear-gradient(145deg, var(--c), color-mix(in srgb, var(--c) 35%, transparent)); border: 1px solid rgba(255,255,255,.28);
     box-shadow: 0 8px 22px color-mix(in srgb, var(--c) 35%, transparent), inset 0 1px 0 rgba(255,255,255,.4); }
@@ -434,6 +439,130 @@ button.tg-stat:hover { transform: translateY(-2px); }
     .tg-section { padding: 16px; }
     .tg-hide-sm { display: none !important; }
 }
+
+/* ══════════ Thèmes de fond : sombre (défaut), blanc cassé (light), jaune clair (yellow) ══════════
+   Choisi avec le sélecteur en haut de page, mémorisé dans le navigateur (html[data-tg-theme]). */
+html { background: #071530; }
+.tg-avatar { color: #fff; }
+.tg-pack-name { color: color-mix(in srgb, var(--c, #fff) 55%, #fff); }
+.tg-h-icon { color: var(--tg-fg, #fff); }
+
+/* Sélecteur de thème */
+.tg-theme { display: inline-flex; align-items: center; gap: 4px; padding: 4px; border-radius: 999px; background: rgba(255,255,255,.07); border: 1px solid var(--tg-stroke-soft); }
+.tg-theme button { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; transition: transform .15s, border-color .15s; }
+.tg-theme button:hover { transform: scale(1.12); }
+.tg-theme [data-v="dark"]   { background: linear-gradient(145deg, #1D3C69, #071530); box-shadow: inset 0 0 0 1px rgba(255,255,255,.35); }
+.tg-theme [data-v="light"]  { background: linear-gradient(145deg, #FFFFFF, #EFEBE1); box-shadow: inset 0 0 0 1px rgba(16,38,75,.2); }
+.tg-theme [data-v="yellow"] { background: linear-gradient(145deg, #FFF6CC, #FCE38A); box-shadow: inset 0 0 0 1px rgba(16,38,75,.2); }
+html:not([data-tg-theme]) .tg-theme [data-v="dark"], html[data-tg-theme="dark"] .tg-theme [data-v="dark"],
+html[data-tg-theme="light"] .tg-theme [data-v="light"], html[data-tg-theme="yellow"] .tg-theme [data-v="yellow"] { border-color: var(--tg-yellow, #F5C400); }
+
+/* ── Thèmes clairs (blanc cassé et jaune clair) ── */
+html[data-tg-theme="light"]  { background: #F5F2EA; }
+html[data-tg-theme="yellow"] { background: #FFF5D1; }
+html[data-tg-theme="light"] .tg-body { color: #10264B; background:
+    radial-gradient(1100px 650px at 88% -12%, rgba(29,60,105,.10), transparent 60%),
+    radial-gradient(900px 600px at -10% 110%, rgba(245,196,0,.12), transparent 60%),
+    linear-gradient(165deg, #FBF9F4 0%, #F5F2EA 55%, #EFEBE1 100%) fixed; }
+html[data-tg-theme="yellow"] .tg-body { color: #10264B; background:
+    radial-gradient(1100px 650px at 88% -12%, rgba(255,255,255,.65), transparent 60%),
+    radial-gradient(900px 600px at -10% 110%, rgba(245,196,0,.22), transparent 60%),
+    linear-gradient(165deg, #FFFBEA 0%, #FFF3C4 55%, #FCE7A0 100%) fixed; }
+html[data-tg-theme="light"] .tg-backdrop-fx .o2, html[data-tg-theme="yellow"] .tg-backdrop-fx .o2 { background: rgba(29,60,105,.10); }
+html[data-tg-theme="yellow"] .tg-backdrop-fx .o1 { background: rgba(255,255,255,.55); }
+
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg {
+    --tg-fg: #10264B;
+    --tg-gold-ink: #A87C00;
+    --tg-ok: #0F7A3D;
+    --tg-warn: #8A5A00;
+    --tg-ko: #B42318;
+    --tg-ink-2: rgba(16,38,75,.74);
+    --tg-ink-3: rgba(16,38,75,.52);
+    --tg-stroke: rgba(16,38,75,.12);
+    --tg-stroke-soft: rgba(16,38,75,.08);
+    --tg-shadow: 0 18px 44px rgba(16,38,75,.10), 0 2px 6px rgba(16,38,75,.05);
+    color: #10264B;
+}
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-glass { background: linear-gradient(145deg, rgba(255,255,255,.86), rgba(255,255,255,.6)); border-color: rgba(255,255,255,.95); box-shadow: var(--tg-shadow), inset 0 1px 0 #fff, 0 0 0 1px var(--tg-stroke-soft); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-glass::before { background: linear-gradient(120deg, rgba(255,255,255,.5) 0%, transparent 30%); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-eyebrow, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-brand-name span, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-rules b, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-req { color: var(--tg-gold-ink); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-theme { background: rgba(255,255,255,.75); }
+/* Navigation */
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-nav-item:hover, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-nav-pack:hover { background: rgba(16,38,75,.05); color: #10264B; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-nav-item.is-active { background: #10264B; border-color: #10264B; color: #fff; box-shadow: 0 8px 20px rgba(16,38,75,.22); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-nav-pack { color: #10264B; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-bar, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-progress, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-bar, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-mini { background: rgba(16,38,75,.08); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-side-card, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-kv div, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-winner-grid div, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-pp, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-sub { background: rgba(255,255,255,.72); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-rules { background: rgba(245,196,0,.14); border-color: rgba(245,196,0,.45); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-tab { color: #10264B; background: rgba(255,255,255,.85); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-tab.is-active { background: #10264B; color: #fff; border-color: #10264B; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-profile, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-chip, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-icon { background: rgba(255,255,255,.85); border-color: var(--tg-stroke); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-chip b, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-strong, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-lot-winner b { color: #10264B; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-link:hover { color: #10264B; }
+/* Boutons, champs */
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-btn { box-shadow: 0 8px 20px rgba(245,196,0,.32), inset 0 1px 0 rgba(255,255,255,.6), 0 0 0 1px rgba(16,38,75,.08); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-btn-ghost { color: #10264B; background: rgba(255,255,255,.88); border-color: var(--tg-stroke); box-shadow: 0 2px 6px rgba(16,38,75,.05); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-btn-ghost:hover { color: #fff; background: #10264B; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-btn-danger { color: #B42318; background: #FDECEC; border-color: #F5C2C0; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-input { color: #10264B; background: rgba(255,255,255,.92); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-input::placeholder { color: rgba(16,38,75,.38); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-input[type="date"] { color-scheme: light; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-error { color: #B42318; }
+/* Badges, catégories, statistiques */
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-badge { color: rgba(16,38,75,.75); background: rgba(255,255,255,.8); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-badge::before { box-shadow: none; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-s-preparation, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-s-draft, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-s-computing { color: #8A5A00; background: #FFF4D1; border-color: #F3D88A; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-s-ready { color: #1D4E9E; background: #E6EEFB; border-color: #B9CDF0; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-s-in_progress, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-s-drawing { color: #7A5200; background: #FFE69A; border-color: #F5C400; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-s-done, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-s-drawn { color: #0F7A3D; background: #E3F6EA; border-color: #A9DFBF; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-s-closed { color: #55627A; background: #EEF0F4; border-color: #D5DAE3; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-cat { color: #10264B; background: color-mix(in srgb, var(--c) 18%, #fff); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-cat::before { box-shadow: none; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-pack-name { color: color-mix(in srgb, var(--c, #10264B) 60%, #10264B); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-stat-accent { background: radial-gradient(260px 140px at 100% 0%, rgba(245,196,0,.32), transparent 70%), linear-gradient(145deg, rgba(255,255,255,.9), rgba(255,255,255,.62)); border-color: rgba(245,196,0,.5); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-stat-accent .tg-stat-value, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-big b { color: var(--tg-gold-ink); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-stat-icon { background: rgba(16,38,75,.05); }
+/* Tableau, alertes, fenêtres */
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-table th { background: rgba(16,38,75,.03); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-table td { border-bottom-color: rgba(16,38,75,.06); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-table tbody tr:hover { background: rgba(245,196,0,.08); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-alert-ok { color: #0F7A3D; background: #E3F6EA; border-color: #A9DFBF; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-alert-ko { color: #B42318; background: #FDECEC; border-color: #F5C2C0; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-alert-warn { color: #7A5200; background: #FFF4D1; border-color: #F3D88A; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-backdrop { background: rgba(16,38,75,.35); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-modal { color: #10264B; background: linear-gradient(160deg, rgba(255,255,255,.97), rgba(250,248,242,.97)); border-color: #fff; box-shadow: 0 30px 80px rgba(16,38,75,.25), 0 0 0 1px var(--tg-stroke-soft); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-pool-row { border-bottom-color: rgba(16,38,75,.06); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-empty { color: var(--tg-ink-3); }
+/* Cartes de lots (les visuels restent bleu marine) */
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-lot, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-honor { background: rgba(255,255,255,.8); border-color: var(--tg-stroke); box-shadow: 0 6px 18px rgba(16,38,75,.06); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-lot:hover { box-shadow: 0 14px 30px rgba(16,38,75,.12); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-lot-winner, :is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-state { background: rgba(16,38,75,.04); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-state.is-ok { color: #0F7A3D; background: #E3F6EA; border-color: #A9DFBF; }
+/* Page de révélation : la zone de tirage et la Transaction ID restent sur fond bleu marine */
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-slot { background: linear-gradient(160deg, #1D3C69, #10264B); border-color: rgba(16,38,75,.4); box-shadow: 0 14px 34px rgba(16,38,75,.22), inset 0 0 40px rgba(0,0,0,.25); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-slot-sub { color: rgba(255,255,255,.6); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-winner { background: linear-gradient(150deg, rgba(245,196,0,.30), rgba(255,255,255,.88) 55%); border-color: rgba(245,196,0,.6); box-shadow: 0 0 0 1px rgba(245,196,0,.2), 0 26px 60px rgba(168,124,0,.16), inset 0 1px 0 #fff; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-winner::before { background: linear-gradient(90deg, transparent, rgba(255,255,255,.6), transparent); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-provisional { color: #7A5200; background: rgba(245,196,0,.2); border-color: rgba(168,124,0,.55); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-provisional.is-ko { color: #B42318; background: #FDECEC; border-color: #F5C2C0; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-txn { background: linear-gradient(160deg, #1D3C69, #10264B); border-color: rgba(16,38,75,.4); color: #fff; }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-txn small { color: rgba(255,255,255,.6); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-txn-id { background: linear-gradient(150deg, rgba(245,196,0,.35), #10264B 60%); }
+/* Tableau d'honneur : la carte « Dernier gagnant » et l'horloge restent bleu marine */
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-latest { color: #fff; background: radial-gradient(600px 300px at 100% 0%, rgba(245,196,0,.25), transparent 60%), linear-gradient(140deg, #1D3C69, #10264B 70%); border-color: rgba(245,196,0,.5); box-shadow: 0 24px 60px rgba(16,38,75,.28), inset 0 1px 0 rgba(255,255,255,.15); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-latest .tg-h-latest-meta { color: rgba(255,255,255,.8); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-latest .tg-cat { color: #fff; background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.3); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-latest .tg-h-label { color: var(--tg-yellow); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-clock { color: #fff; background: #10264B; border-color: #10264B; box-shadow: 0 8px 20px rgba(16,38,75,.2); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-live { color: #0F7A3D; background: rgba(22,163,74,.10); border-color: rgba(22,163,74,.3); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-honor-top { background: rgba(16,38,75,.03); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-honor.is-won::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--c); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-winner-phone { width: fit-content; color: #10264B; padding: 3px 10px; border-radius: 8px; background: rgba(245,196,0,.24); border: 1px solid rgba(245,196,0,.55); }
+:is(html[data-tg-theme="light"], html[data-tg-theme="yellow"]) .tg-h-shimmer { background: linear-gradient(90deg, rgba(16,38,75,.05), rgba(16,38,75,.11), rgba(16,38,75,.05)); background-size: 200% 100%; }
+/* Jaune clair : verre un peu plus opaque pour détacher les cartes du fond */
+html[data-tg-theme="yellow"] .tg-glass:not(.tg-h-latest):not(.tg-stat-accent) { background: linear-gradient(145deg, rgba(255,255,255,.92), rgba(255,255,255,.74)); }
+
 @media (prefers-reduced-motion: reduce) {
     .tg *, .tg *::before, .tg *::after { animation: none !important; transition: none !important; }
 }

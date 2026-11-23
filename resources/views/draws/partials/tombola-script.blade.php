@@ -5,7 +5,7 @@
     if (window.tgDraw) return;   // déjà chargé (navigation wire:navigate)
 
     const sleep = ms => new Promise(r => setTimeout(r, ms));
-    const fakeMasked = () => '77 ** ** ' + String(Math.floor(Math.random() * 100)).padStart(2, '0');
+    const fakeMasked = () => { const d = String(Math.floor(Math.random() * 1000)).padStart(3, '0'); return '77 ** *' + d[0] + ' ' + d.slice(1); };
 
     // Scène de tirage : le gagnant est tiré et enregistré par le serveur ($wire.launch),
     // le défilement n'est qu'un habillage (aucun tirage côté navigateur).

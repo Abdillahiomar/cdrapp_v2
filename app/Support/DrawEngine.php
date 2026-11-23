@@ -59,6 +59,16 @@ class DrawEngine
             : $local;
     }
 
+    /** 25377046542 → 77 ** *5 42 (révélation du gagnant : 2 premiers et 3 derniers chiffres) */
+    public static function maskReveal(string $msisdn): string
+    {
+        $local = str_starts_with($msisdn, '253') && strlen($msisdn) === 11 ? substr($msisdn, 3) : $msisdn;
+
+        return strlen($local) > 5
+            ? trim(chunk_split(substr($local, 0, 2) . str_repeat('*', strlen($local) - 5) . substr($local, -3), 2, ' '))
+            : $local;
+    }
+
     /** 25377046542 → 77 04 65 42 */
     public static function display(string $msisdn): string
     {

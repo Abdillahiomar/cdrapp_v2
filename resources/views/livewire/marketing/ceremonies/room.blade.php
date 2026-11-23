@@ -69,7 +69,7 @@ new #[Layout('layouts.tombola')] class extends Component {
             $winner = app(DrawEngine::class)->drawOne($prize, auth()->id());
             $this->lotId = $prize->id;
 
-            return ['ok' => true, 'masked' => DrawEngine::maskShort($winner->msisdn)];
+            return ['ok' => true, 'masked' => DrawEngine::maskReveal($winner->msisdn)];
         } catch (\RuntimeException $e) {
             $this->error = $e->getMessage();
 
@@ -96,9 +96,7 @@ new #[Layout('layouts.tombola')] class extends Component {
                     'draw'    => $draw,
                     'prize'   => $prize,
                     'rank'    => $draw->prizes->search(fn ($p) => $p->id === $prize->id) + 1,
-                    'types'   => $draw->typeLabels()->implode(', '),
                     'winners' => $prize->winners->whereIn('kind', ['winner', 'extra'])->values(),
-                    'subs'    => $prize->winners->where('kind', 'substitute')->values(),
                     'open'    => in_array($draw->status, ['ready', 'drawing'], true) && !$this->ceremony->isClosed(),
                 ];
             }
@@ -115,9 +113,6 @@ new #[Layout('layouts.tombola')] class extends Component {
 <div>
 @php
     $fmt       = fn ($n) => number_format((float) $n, 0, ',', ' ');
-    $lotsTotal = $draws->sum(fn ($d) => $d->prizes->sum('quantity'));
-    $lotsDrawn = $draws->sum(fn ($d) => $d->prizes->sum(fn ($p) => min($p->drawn_count, $p->quantity)));
-    $tickets   = $draws->sum(fn ($d) => $d->ticket_count ?? $d->eligible_count ?? 0);
     $icon      = fn ($path, $color = '#fff') => '<svg viewBox="0 0 24 24" fill="none" stroke="' . $color . '" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' . $path . '</svg>';
     $code      = fn ($d) => mb_strtoupper(mb_substr(\Illuminate\Support\Str::ascii($d->categoryName()), 0, 3));
     $giftPath  = '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M5 12v9h14v-9M12 8v13M12 8S10.5 3 8 4s0 4 4 4zM12 8s1.5-5 4-4 0 4-4 4z"/>';
@@ -164,9 +159,6 @@ new #[Layout('layouts.tombola')] class extends Component {
             <div class="tg-hero-details">
                 <span class="tg-cat">Pack {{ $d->categoryName() }}</span>
                 <h2 class="tg-hero-title">{{ $p->name }}</h2>
-                @if($lot['types'])
-                    <p class="tg-muted" style="margin:-6px 0 14px;">{{ $lot['types'] }}</p>
-                @endif
                 <div class="tg-kv">
                     <div><small>Pack</small><span>{{ $d->categoryName() }}</span></div>
                     <div><small>Rang</small><span>{{ $lot['rank'] }}</span></div>
@@ -189,7 +181,7 @@ new #[Layout('layouts.tombola')] class extends Component {
                     <p class="tg-eyebrow" style="letter-spacing:3px;">Tirage au sort</p>
                     <p class="tg-text" style="margin-top:6px;">
                         @if($pool !== null)
-                            {{ $d->isTicketMode() ? 'Un ticket (une transaction) va être tiré parmi les' : 'Un gagnant va être tiré parmi les' }} <b style="color:#fff;">{{ $fmt($pool) }}</b> {{ $d->ticket_count !== null ? 'tickets' : 'clients' }} éligibles du pack {{ $d->categoryName() }}.
+                            {{ $d->isTicketMode() ? 'Un ticket (une transaction) va être tiré parmi les' : 'Un gagnant va être tiré parmi les' }} <b style="color:var(--tg-fg);">{{ $fmt($pool) }}</b> {{ $d->ticket_count !== null ? 'tickets' : 'clients' }} éligibles du pack {{ $d->categoryName() }}.
                         @else
                             Liste des éligibles du pack {{ $d->categoryName() }}.
                         @endif
@@ -226,7 +218,7 @@ new #[Layout('layouts.tombola')] class extends Component {
                                 @if($current->status !== 'valid')
                                     <span class="tg-provisional is-ko">Écarté</span>
                                 @else
-                                    <span class="tg-provisional">Gagnant provisoire</span>
+                                    <span class="tg-provisional">Le(a) Gagnant(e)</span>
                                 @endif
                             </div>
                             <div class="tg-step" :class="shown > 1 && 'in'">
@@ -235,10 +227,20 @@ new #[Layout('layouts.tombola')] class extends Component {
                                     <p class="tg-muted" style="margin-top:4px;">Tirage complémentaire (remplacement d'un gagnant écarté)</p>
                                 @endif
                             </div>
-                            <div class="tg-txn tg-step" :class="shown > 2 && 'in'">
+                            @if($current->transaction_id)
+                                <div class="tg-txn tg-txn-id tg-step" style="margin-top:18px;" :class="shown > 2 && 'in'">
+                                    <div style="min-width:0;">
+                                        <small>Transaction ID du ticket tiré</small>
+                                        <code>{{ $current->transaction_id }}</code>
+                                    </div>
+                                    <button type="button" class="tg-copy" title="Copier la Transaction ID"
+                                            x-on:click="copy(@js($current->transaction_id), 'Transaction ID copiée')"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg></button>
+                                </div>
+                            @endif
+                            <div class="tg-txn tg-step" :class="shown > 2 && 'in'" @if($current->transaction_id) style="margin-top:10px;" @endif>
                                 <div style="min-width:0;">
                                     <small>Numéro de téléphone</small>
-                                    <code x-text="full ? @js(\App\Support\DrawEngine::display($current->msisdn)) : @js(\App\Support\DrawEngine::maskShort($current->msisdn))">{{ \App\Support\DrawEngine::maskShort($current->msisdn) }}</code>
+                                    <code x-text="full ? @js(\App\Support\DrawEngine::display($current->msisdn)) : @js(\App\Support\DrawEngine::maskReveal($current->msisdn))">{{ \App\Support\DrawEngine::maskReveal($current->msisdn) }}</code>
                                 </div>
                                 <div style="display:flex; gap:8px;">
                                     <button type="button" class="tg-copy" x-on:click="full = !full" :title="full ? 'Masquer le numéro' : 'Afficher le numéro complet'">
@@ -249,16 +251,6 @@ new #[Layout('layouts.tombola')] class extends Component {
                                             x-on:click="copy(@js(\App\Support\DrawEngine::display($current->msisdn)))"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg></button>
                                 </div>
                             </div>
-                            @if($current->transaction_id)
-                                <div class="tg-txn tg-txn-id tg-step" :class="shown > 2 && 'in'">
-                                    <div style="min-width:0;">
-                                        <small>Transaction ID du ticket tiré</small>
-                                        <code>{{ $current->transaction_id }}</code>
-                                    </div>
-                                    <button type="button" class="tg-copy" title="Copier la Transaction ID"
-                                            x-on:click="copy(@js($current->transaction_id), 'Transaction ID copiée')"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg></button>
-                                </div>
-                            @endif
                             <div class="tg-winner-grid tg-step" :class="shown > 3 && 'in'">
                                 <div><small>{{ $current->transaction_id ? 'Tickets du client sur la période' : 'Tickets sur la période' }}</small><span>{{ $fmt($current->txn_count) }}</span></div>
                                 <div><small>Lot remporté</small><span>{{ $p->name }}</span></div>
@@ -279,8 +271,8 @@ new #[Layout('layouts.tombola')] class extends Component {
                                 <p class="tg-label">Gagnants déjà tirés pour ce lot</p>
                                 @foreach($lot['winners']->slice(0, -1) as $w)
                                     <div class="tg-pool-row">
-                                        <span style="flex:1; color:#fff; font-weight:700;">{{ $w->name ?? '—' }}</span>
-                                        <span class="tg-mono" style="color:var(--tg-ink-2);">{{ \App\Support\DrawEngine::maskShort($w->msisdn) }}{{ $w->transaction_id ? ' · Txn ' . $w->transaction_id : '' }}</span>
+                                        <span style="flex:1; color:var(--tg-fg); font-weight:700; text-transform:uppercase;">{{ $w->name ?? '—' }}</span>
+                                        <span class="tg-mono" style="color:var(--tg-ink-2);">{{ \App\Support\DrawEngine::maskReveal($w->msisdn) }}{{ $w->transaction_id ? ' · Txn ' . $w->transaction_id : '' }}</span>
                                     </div>
                                 @endforeach
                             </div>
@@ -289,33 +281,6 @@ new #[Layout('layouts.tombola')] class extends Component {
                 @endif
             </div>
 
-            {{-- Suppléants --}}
-            @if($current && $lot['subs']->isNotEmpty())
-                <div class="tg-glass tg-subs tg-step" x-data :class="($store.tgReveal?.shown ?? 99) > 4 && 'in'">
-                    <div class="tg-subs-head">
-                        <h3>Suppléants classés</h3>
-                        <p>Tirés dans le pack {{ $d->categoryName() }}</p>
-                    </div>
-                    <div class="tg-subs-list">
-                        @foreach($lot['subs'] as $s)
-                            <div class="tg-sub">
-                                <span class="tg-sub-rank">Suppléant {{ $s->rank }}</span>
-                                @if($s->promoted_at)
-                                    <span class="tg-provisional" style="font-size:10px; padding:3px 8px; margin-left:6px;">Promu</span>
-                                @elseif($s->status !== 'valid')
-                                    <span class="tg-provisional is-ko" style="font-size:10px; padding:3px 8px; margin-left:6px;">Écarté</span>
-                                @endif
-                                <div class="tg-sub-name">{{ $s->name ?? '—' }}</div>
-                                <div class="tg-sub-phone">{{ \App\Support\DrawEngine::maskShort($s->msisdn) }}</div>
-                                @if($s->transaction_id)
-                                    <div class="tg-sub-txn tg-mono" title="Transaction ID du ticket tiré">Txn {{ $s->transaction_id }}</div>
-                                @endif
-                                <div class="tg-sub-txn">{{ $fmt($s->txn_count) }} ticket(s)</div>
-                            </div>
-                        @endforeach
-                    </div>
-                </div>
-            @endif
         </div>
     </div>
 
@@ -331,21 +296,6 @@ new #[Layout('layouts.tombola')] class extends Component {
         <div class="tg-alert tg-alert-warn" style="text-align:center; margin:0;">La cérémonie n'est pas encore prête : toutes les listes d'éligibles doivent être figées et avoir leurs lots.</div>
     @endif
 
-    {{-- STATISTIQUES --}}
-    <div class="tg-stats">
-        @foreach([
-            ['<path d="M3 7l9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7M12 11v10"/>', $lotsTotal, 'Lots au total', false],
-            [$giftPath, $lotsTotal - $lotsDrawn, 'Lots disponibles', true],
-            ['<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>', $lotsDrawn, 'Lots déjà tirés', false],
-            ['<path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v8a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2z"/><path d="M13 6v12" stroke-dasharray="2 2"/>', $fmt($tickets), 'Tickets éligibles', false],
-        ] as [$path, $value, $label, $accent])
-            <div class="tg-glass tg-stat {{ $accent ? 'tg-stat-accent' : '' }}">
-                <div class="tg-stat-icon">{!! $icon($path, $accent ? '#F5C400' : '#fff') !!}</div>
-                <p class="tg-stat-value">{{ $value }}</p>
-                <p class="tg-stat-label">{{ $label }}</p>
-            </div>
-        @endforeach
-    </div>
 
     {{-- UNE SECTION PAR PACK --}}
     @foreach($draws as $d)
@@ -359,7 +309,7 @@ new #[Layout('layouts.tombola')] class extends Component {
                 <div style="display:flex; align-items:center; gap:14px;">
                     <div class="tg-pack-badge">{!! $icon('<path d="M6 3h12l4 6-10 12L2 9z"/><path d="M2 9h20M12 21L8 9l4-6 4 6z"/>', '#10264B') !!}</div>
                     <div>
-                        <p class="tg-pack-name" style="color:color-mix(in srgb, var(--c) 55%, #fff);">Pack {{ $d->categoryName() }}</p>
+                        <p class="tg-pack-name">Pack {{ $d->categoryName() }}</p>
                         <p class="tg-muted" style="margin-top:2px;">{{ $d->prizes->count() }} rang(s) de lots</p>
                     </div>
                 </div>

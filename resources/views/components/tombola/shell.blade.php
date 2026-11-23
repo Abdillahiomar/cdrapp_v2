@@ -110,6 +110,7 @@
                 </div>
             </div>
             <div class="tg-top-right">
+                <x-tombola.theme-switch />
                 {{ $status ?? '' }}
                 @if($user)
                     <div class="tg-profile" title="{{ $user->name }}">

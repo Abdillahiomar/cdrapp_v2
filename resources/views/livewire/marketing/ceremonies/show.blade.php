@@ -215,7 +215,7 @@ new #[Layout('layouts.tombola')] class extends Component {
         <div style="display:flex; flex-direction:column; gap:14px;">
             <div style="min-width:0;">
                 <p class="tg-muted">
-                    @if($ceremony->ceremony_date) Cérémonie du <b style="color:#fff;">{{ $ceremony->ceremony_date->format('d/m/Y') }}</b> · @endif
+                    @if($ceremony->ceremony_date) Cérémonie du <b style="color:var(--tg-fg);">{{ $ceremony->ceremony_date->format('d/m/Y') }}</b> · @endif
                     créée par {{ $ceremony->creator?->name ?? '—' }} le {{ $ceremony->created_at->format('d/m/Y H:i') }}
                     · un seul lot par client sur toute la cérémonie
                 </p>
@@ -283,7 +283,7 @@ new #[Layout('layouts.tombola')] class extends Component {
                 @if($started)
                     Listes et lots figés depuis le premier tirage.
                 @elseif($ready)
-                    <span style="color:#8EEBB0; font-weight:700;">✓ Toutes les listes sont figées et ont leurs lots : la cérémonie est prête.</span>
+                    <span style="color:var(--tg-ok); font-weight:700;">✓ Toutes les listes sont figées et ont leurs lots : la cérémonie est prête.</span>
                 @else
                     Pour chaque catégorie : réglez les critères, ajoutez les lots, puis calculez et figez la liste. La salle de tirage s'ouvre quand toutes les listes sont prêtes.
                 @endif
@@ -308,12 +308,12 @@ new #[Layout('layouts.tombola')] class extends Component {
                     au moins {{ $d->min_txn_count }} transaction(s){{ $d->min_txn_amount > 0 ? ', dont une ≥ ' . $fmt($d->min_txn_amount) . ' FDJ' : '' }}
                     <div style="margin-top:8px;">
                         @if($dReady)
-                            <span style="font-size:24px; font-weight:900; color:#fff; letter-spacing:-.5px;">{{ $fmt($d->eligible_count) }}</span>
+                            <span style="font-size:24px; font-weight:900; color:var(--tg-fg); letter-spacing:-.5px;">{{ $fmt($d->eligible_count) }}</span>
                             <span class="tg-muted">client(s) éligible(s)</span>
                         @elseif($d->status === 'computing')
-                            <span style="color:#FFD666; font-weight:700;">⏳ Calcul en cours…</span>
+                            <span style="color:var(--tg-warn); font-weight:700;">⏳ Calcul en cours…</span>
                         @else
-                            <span style="color:#FFD666; font-weight:700;">Liste pas encore calculée</span>
+                            <span style="color:var(--tg-warn); font-weight:700;">Liste pas encore calculée</span>
                         @endif
                     </div>
                 </div>
@@ -323,13 +323,13 @@ new #[Layout('layouts.tombola')] class extends Component {
                             @if($p->imageUrl())
                                 <img src="{{ $p->imageUrl() }}" alt="" class="tg-thumb">
                             @endif
-                            <span style="flex:1; color:#fff; font-weight:600;">{{ $p->name }}</span>
-                            <span style="white-space:nowrap; font-weight:700; color:{{ $p->drawn_count >= $p->quantity ? '#8EEBB0' : 'var(--tg-ink-3)' }};">
+                            <span style="flex:1; color:var(--tg-fg); font-weight:600;">{{ $p->name }}</span>
+                            <span style="white-space:nowrap; font-weight:700; color:{{ $p->drawn_count >= $p->quantity ? 'var(--tg-ok)' : 'var(--tg-ink-3)' }};">
                                 {{ $started ? $p->drawn_count . ' / ' : '× ' }}{{ $p->quantity }}
                             </span>
                         </div>
                     @empty
-                        <p style="font-size:12px; color:#FFB4AB; margin:6px 0;">Aucun lot : ajoutez-en depuis la page de la liste.</p>
+                        <p style="font-size:12px; color:var(--tg-ko); margin:6px 0;">Aucun lot : ajoutez-en depuis la page de la liste.</p>
                     @endforelse
                 </div>
                 <div class="tg-sep" style="padding:12px 18px; text-align:right;">
